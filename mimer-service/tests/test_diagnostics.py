@@ -55,3 +55,23 @@ async def test_diagnostics_source_readiness_counts(client: AsyncClient) -> None:
     assert body["fixture_scheduled_jobs"] >= 4
     # No live fetches happen in tests, so no live-source failures.
     assert body["live_source_failures"] == 0
+
+
+async def test_diagnostics_fund_coverage_counts(client: AsyncClient) -> None:
+    body = (await client.get("/api/v1/diagnostics")).json()
+    # Target-fund coverage (deterministic from the in-code matrix).
+    assert body["target_funds_total"] == 3
+    assert body["target_funds_with_live_price"] == 3  # Stooq for all three
+    assert body["target_funds_with_live_holdings"] == 1  # ISF only (verified iShares config)
+    # A fixture-fed data type is never counted as live readiness.
+    assert body["target_funds_with_live_facts"] == 0
+    assert body["target_funds_with_live_documents"] == 0
+    assert body["fund_sources_verified_live"] == 1
+    assert body["fund_sources_fixture_only"] == 6  # facts + documents across 3 funds
+    assert body["fund_source_blockers"] >= 1
+
+
+async def test_diagnostics_does_not_mark_fixtures_as_live(client: AsyncClient) -> None:
+    body = (await client.get("/api/v1/diagnostics")).json()
+    # Distributions are candidate/planned only — no target fund has live distributions yet.
+    assert body["target_funds_with_live_distributions"] == 0

@@ -199,3 +199,36 @@ async def test_run_once_does_not_duplicate_active_run(session: AsyncSession) -> 
     result = await sched.run_due_jobs(session, instance_id="T", lease_seconds=300, now=now)
     # The job is leased, so this pass does not see it as due / claim it again.
     assert result.claimed == 0
+
+
+# --- production scheduler-safety contract -----------------------------------
+
+
+async def test_verify_fund_sources_is_not_a_seeded_scheduled_job(session: AsyncSession) -> None:
+    # The bounded verifier is explicit-only — it must never be seeded as a recurring job
+    # (it would make live calls on a schedule).
+    job_types = set((await session.execute(select(ScheduledJob.job_type))).scalars().all())
+    assert "verify_fund_sources" not in job_types
+
+
+async def test_seeded_issuer_jobs_default_to_fixtures_not_candidate_live(
+    session: AsyncSession,
+) -> None:
+    # The seeded holdings/distribution jobs must run the offline fixture default, never a
+    # candidate/blocked live source — a scheduled run must not surprise-fetch a live endpoint.
+    from app.services import capabilities as capabilities_service
+    from app.sources import source_readiness as readiness
+
+    for job_type in ("issuer_holdings_ingestion", "distribution_ingestion"):
+        active = await session.scalar(
+            select(ScheduledJob).where(
+                ScheduledJob.job_type == job_type, ScheduledJob.is_active.is_(True)
+            )
+        )
+        assert active is not None
+        configured = capabilities_service.configured_source(job_type)
+        row = readiness.get_row(configured) if configured else None
+        # Either the configured default is a fixture row, or a fixture-named source.
+        assert (row is not None and row.status == readiness.FIXTURE) or (
+            configured and configured.endswith("_fixture")
+        ), (job_type, configured)

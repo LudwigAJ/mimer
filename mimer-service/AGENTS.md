@@ -222,6 +222,27 @@ clients (desktop GUI, browser dashboard, CLI, automation workers) that live in
       stable `reason` verdict (`verified` / `binary_unsupported` / `zero_rows` /
       `missing_fields` / `cache_hit` / `budget_blocked` / `no_url` / `fetch_error` /
       `unknown_source`) + the detected `payload_format` — keep those distinct and honest.
+  - **Target-fund coverage + bounded live verification:** the per-(fund, data type)
+    live‑readiness matrix for VUSA / ISF / JEPG lives in one in‑code module
+    (`app/sources/fund_source_coverage.py`, a pure composition of `source_readiness.py` +
+    `issuer_source_config.py`), exposed at `GET /api/v1/data-sources/fund-coverage`,
+    `GET /api/v1/capabilities` (`fund_coverage`) and `GET /api/v1/diagnostics`
+    (`target_funds_with_live_*` / `fund_sources_*` / `fund_source_blockers`). The
+    `verify_fund_sources` worker (`app/services/fund_source_verification.py`) runs bounded,
+    safe live checks per fund. Rules (do not regress):
+    - **Do not treat the listing price as NAV.** The Stooq cell is the exchange close
+      (`implemented_live`); NAV is a separate `planned` cell with no source — never relabel
+      the close as NAV, and never conflate the two in the matrix.
+    - **Do not count a fixture as live coverage.** Facts/documents are `fixture` (offline
+      `issuer_fixture`/`document_fixture`); `target_funds_with_live_*` must stay 0 for them.
+    - **Do not mark a fund cell `verified_live`** unless its issuer config is genuinely
+      `verified`; only ISF holdings qualifies today. `verify_fund_sources` reports the live
+      outcome but **never promotes** a config (promotion stays a deliberate code change).
+    - **Do not store or ingest from `verify_fund_sources`.** It is fetch+parse only
+      (`stored_verified` stays false), routes every live hop through `guarded_fetch`, and a
+      blocked provider (binary `.xls` / TLS / no usable config) never fails the run.
+    - **Do not schedule `verify_fund_sources`** as a recurring job — it is an explicit‑only
+      diagnostic.
   - **Constituent identity resolution:** `constituent_identity_resolution`
     (`app/services/constituent_identity.py` + `app/sources/constituents.py`)
     resolves ETF/fund *constituents* into the canonical instrument master
@@ -702,11 +723,13 @@ clients (desktop GUI, browser dashboard, CLI, automation workers) that live in
       logs / request cache** for any live source. **Do not log IBKR / OpenFIGI / any API
       token** — the readiness matrix may *describe* that a token is required, but never embeds
       a secret value or a tokenised URL.
-    - **IBKR is planned, not implemented this slice.** `ibkr_flex_import` (broker/account
-      truth) is planned + HIGH‑PRIORITY; `ibkr_market_data` is planned + optional. When
-      wiring Flex: idempotent, token never logged, feed the existing
-      `broker_imports`/`portfolio_transactions` path, then trigger the resolve → price → FX →
-      valuation cascade.
+    - **IBKR is deferred — do not implement it unless explicitly requested again.** It stays
+      `planned` in the readiness matrix: `ibkr_flex_import` (broker/account truth) is
+      planned + HIGH‑PRIORITY; `ibkr_market_data` is planned + optional. Do **not** add Flex
+      Web Service, IBKR market data, or any TWS/Gateway integration in passing. If/when a
+      future slice explicitly asks for Flex: idempotent, token never logged, feed the
+      existing `broker_imports`/`portfolio_transactions` path, then trigger the resolve →
+      price → FX → valuation cascade.
   - **Running / leased job observability** (`app/services/job_leases.py`,
     schemas in `app/schemas/job_timeline.py`): the **live counterpart** of the
     timeline (which covers *completed* ``job_runs``). It classifies the

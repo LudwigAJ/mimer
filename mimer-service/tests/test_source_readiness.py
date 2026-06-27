@@ -127,6 +127,20 @@ def test_candidate_and_planned_are_never_scheduler_safe() -> None:
             assert row.safe_for_scheduler is False, row.source_name
 
 
+def test_export_only_parsers_are_implemented_live_but_never_scheduler_safe() -> None:
+    # Offline manual-export parsers are real (implemented_live) but file-driven: there is no
+    # remote endpoint to schedule, so they must never be marked scheduler-safe.
+    for name in ("vanguard_holdings_export", "vanguard_distributions_export"):
+        row = _row(name)
+        assert row.status == readiness.IMPLEMENTED_LIVE, name
+        assert row.safe_for_scheduler is False, name
+
+
+def test_verify_fund_sources_is_explicit_only_not_a_readiness_source() -> None:
+    # The bounded verifier is a diagnostic command, never a seeded/scheduled production source.
+    assert readiness.get_row("verify_fund_sources") is None
+
+
 def test_us_treasury_and_ecb_rates_are_scheduler_safe_official_sources() -> None:
     for name in ("us_treasury_rates", "ecb_rates"):
         row = _row(name)

@@ -17,15 +17,19 @@ from app.sources.base import PricePoint
 
 _STOOQ_URL = "https://stooq.com/q/d/l/"
 
-# Map an exchange code/MIC to a Stooq market suffix.
+# Map an exchange code/MIC/name to a Stooq market suffix. Keys are upper-cased; both
+# MIC/short codes and the human-readable exchange names used by the seed/fund listings
+# are included so a listing like ("VUSA", "London Stock Exchange") resolves to vusa.uk.
 _EXCHANGE_SUFFIX = {
     "LSE": "uk",
     "XLON": "uk",
     "LON": "uk",
+    "LONDON STOCK EXCHANGE": "uk",
     "NASDAQ": "us",
     "XNAS": "us",
     "NYSE": "us",
     "XNYS": "us",
+    "NEW YORK STOCK EXCHANGE": "us",
     "XETRA": "de",
     "XETR": "de",
     "GER": "de",

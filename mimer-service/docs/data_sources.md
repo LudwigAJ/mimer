@@ -140,7 +140,7 @@ the scheduler never makes a *surprise* live call); scheduling it means adding an
 | prices | `instrument_price_fixture` | (offline) | fixture | – | – | – | – | instrument_eod_price_ingestion | dev only | default constituent/imported price source; dev/demo only |
 | holdings | `holdings_fixture` | (offline) | fixture | – | – | – | – | issuer_holdings_ingestion | dev only | default; dev/demo only |
 | holdings | `blackrock_ishares_holdings` | iShares/BlackRock | **verified_live** | ✅ | – | ✅ | – | issuer_holdings_ingestion | daily/weekly | verified for ISF (2026‑06‑25); explicit‑only |
-| holdings | `jpmorgan_etf_holdings` | J.P. Morgan AM | candidate | – | – | ✅ | – | issuer_holdings_ingestion | blocked | JEPG returns legacy binary `.xls` → `binary_unsupported`; verify CSV/HTML/`.xlsx` variant |
+| holdings | `jpmorgan_etf_holdings` | J.P. Morgan AM | candidate | – | – | ✅ | – | issuer_holdings_ingestion | format varies | JEPG export format VARIES: `.xlsx` (247 holdings, parseable) on 2026‑06‑27 vs legacy binary `.xls` (`binary_unsupported`) on 2026‑06‑25 — re‑verify for stability before promoting |
 | holdings | `vanguard_holdings_export` | Vanguard (manual) | implemented_live | – | – | ✅ | – | issuer_holdings_ingestion | manual | offline export parser (no live fetch) |
 | holdings | `vanguard_holdings` | Vanguard | planned | – | – | ✅ | – | issuer_holdings_ingestion | planned | no stable official endpoint verified; do NOT scrape HTML |
 | distributions | `distribution_fixture` | (offline) | fixture | – | – | – | – | distribution_ingestion | dev only | default; dev/demo only |
@@ -175,7 +175,57 @@ uv run python -m app.workers.run instrument_eod_price_ingestion --source stooq -
 uv run python -m app.workers.run issuer_holdings_ingestion --fund-id <ISF_ID> --source blackrock_ishares_holdings --verify-source
 # Identity (batched; strict budget):
 uv run python -m app.workers.run constituent_identity_resolution --source openfigi --limit 25
+# Whole-fund bounded verify (all six data types for one target fund, or all of them):
+uv run python -m app.workers.run verify_fund_sources --fund-symbol ISF --limit 10
+uv run python -m app.workers.run verify_fund_sources --all-target-funds --limit 10
 ```
+
+### Target-fund coverage (VUSA / ISF / JEPG)
+
+The readiness matrix above is keyed by *source*. The **fund coverage matrix**
+(`app/sources/fund_source_coverage.py`) is keyed by *(fund, data type)* — it answers, for the
+three target funds and each of the six data types (facts / listing price / NAV / holdings /
+distributions / documents): *can the backend fetch/parse/store this live, is it scheduler‑safe,
+or what blocks it?* It is a pure composition of the readiness + issuer‑config registries (it
+never drifts from them), exposed read‑only at **`GET /api/v1/data-sources/fund-coverage`**
+(and `?fund_symbol=VUSA`), summarised in `GET /api/v1/capabilities` (`fund_coverage`) and
+`GET /api/v1/diagnostics` (`target_funds_with_live_*` / `fund_sources_verified_live` /
+`fund_sources_fixture_only` / `fund_source_blockers`).
+
+| fund | facts | listing price | NAV | holdings | distributions | documents |
+| --- | --- | --- | --- | --- | --- | --- |
+| **VUSA** (Vanguard) | fixture | implemented_live (stooq) | planned | planned (export‑only) | candidate (TLS) | fixture |
+| **ISF** (iShares) | fixture | implemented_live (stooq) | planned | **verified_live** ✅ | planned | fixture |
+| **JEPG** (JPMorgan) | fixture | implemented_live (stooq) | planned | candidate (`.xlsx`/`.xls` varies) | candidate (no verified URL) | fixture |
+
+**Bounded live verification (2026‑06‑27, this slice).** `verify_fund_sources --all-target-funds`
+confirmed: **ISF holdings verified live** (108 holdings, clean CSV) and **JEPG holdings fetched
+& parsed live as OOXML `.xlsx`** (247 holdings, real ISINs) — but JEPG's recorded 2026‑06‑25
+fetch was a binary `.xls`, so the format is **not stable across runs** and it stays `candidate`
+(promotion waits for a stable re‑verify). **Stooq did NOT return a clean EOD CSV** for the LSE
+ETF symbols (`isf.uk` / `vusa.uk` / `jepg.uk` → 404 / HTML interstitial) — Stooq is free /
+non‑contractual / fragile, so `live_fetch_verified` stays false for listing prices (confirm the
+exact Stooq symbol or use the yfinance fallback). Facts / NAV / documents have no live adapter
+(`skipped_no_live_source`). The verify stored nothing and promoted nothing.
+
+Honesty rules baked into the matrix (never regress):
+
+- **listing price ≠ NAV.** The Stooq cell is the exchange close (`implemented_live`,
+  scheduler‑safe *path*); NAV is a *separate* `planned` cell with no source — the close is
+  never relabelled as NAV. (Stooq did not return a clean CSV for these LSE ETF symbols in the
+  2026‑06‑27 verify; the symbol mapping is best‑effort.)
+- **facts / documents are `fixture`,** not live: the funds are fed by the offline
+  `issuer_fixture` / `document_fixture` providers (and seed). No live issuer‑facts/document
+  adapter exists, so `target_funds_with_live_facts`/`…_documents` are 0.
+- **only ISF holdings is `verified_live`** (its issuer config is `verified`); a fixture is
+  never counted as live coverage, and `verify_fund_sources` never promotes a config.
+- `stored_verified` stays `false` everywhere — the verify path is fetch+parse only.
+
+`verify_fund_sources` runs only **bounded, safe** checks per fund: one guarded Stooq fetch for
+the primary listing, one guarded issuer fetch+parse for holdings/distributions when a *usable*
+config exists, and an honest `skipped_no_live_source` for facts/NAV/documents. It **stores
+nothing**, **promotes nothing**, and a blocked provider (binary `.xls`, TLS, no config) never
+fails the run.
 
 ### The worker cascade (consequence chains)
 

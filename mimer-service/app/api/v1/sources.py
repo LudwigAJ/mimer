@@ -17,6 +17,7 @@ from app.db.models import DataSource
 from app.schemas.capability import SourceCapabilityRead
 from app.schemas.common import ListResponse, Meta
 from app.schemas.data_source import DataSourceRead
+from app.schemas.fund_coverage import FundCoverageMatrix
 from app.schemas.source_readiness import SourceReadinessMatrix
 from app.services import capabilities as capabilities_service
 
@@ -44,6 +45,24 @@ async def source_readiness(
     if requires_secret is not None:
         rows = [r for r in rows if r.requires_secret == requires_secret]
     return SourceReadinessMatrix(data=rows, meta=Meta(count=len(rows)), summary=matrix.summary)
+
+
+# Declared before "" is matched generically; fund-coverage is a sibling path.
+@router.get("/fund-coverage", response_model=FundCoverageMatrix)
+async def fund_coverage(
+    fund_symbol: str | None = Query(default=None),
+    data_type: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+) -> FundCoverageMatrix:
+    """Target-fund (VUSA/ISF/JEPG) live-readiness matrix: per *(fund, data type)* — can the
+    backend fetch/parse/store this data type live, is it scheduler-safe, or what blocks it?"""
+    matrix = capabilities_service.build_fund_coverage_matrix(fund_symbol)
+    rows = matrix.data
+    if data_type is not None:
+        rows = [r for r in rows if r.data_type == data_type]
+    if status is not None:
+        rows = [r for r in rows if r.status == status]
+    return FundCoverageMatrix(data=rows, meta=Meta(count=len(rows)), summary=matrix.summary)
 
 
 # Declared before "" is matched generically; capabilities is a sibling path.

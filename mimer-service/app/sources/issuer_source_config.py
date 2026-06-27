@@ -113,13 +113,14 @@ _CONFIGS: tuple[IssuerSourceConfig, ...] = (
         ),
         source_status=CANDIDATE,
         notes="JPM AM daily ETF holdings export (FundsMarketingHandler). The 'cusip' "
-        "param carries the UCITS ISIN. Candidate: a 2026-06-25 live fetch succeeded "
-        "(HTTP 200) but returned a legacy binary .xls (OLE2) body — verify reports "
-        "reason=binary_unsupported (the backend parses CSV/TSV/HTML-table and OOXML "
-        ".xlsx via the stdlib, but does NOT decode old binary .xls: no pandas / no "
-        "binary-Excel dependency). Promote only once a CSV / HTML-table / .xlsx export "
-        "shape is confirmed (the optional xlrd/calamine follow-up for OLE2 .xls is "
-        "documented in docs/data_sources.md but deliberately not wired).",
+        "param carries the UCITS ISIN. Candidate — issuer export FORMAT VARIES across "
+        "runs: a 2026-06-27 bounded live verify returned a clean OOXML .xlsx body that "
+        "parsed to 247 holdings (real ISINs + weights), but a 2026-06-25 fetch returned "
+        "a legacy binary .xls (OLE2) body (reason=binary_unsupported). The stdlib parses "
+        ".xlsx (and CSV/TSV/HTML-table) but does NOT decode old binary .xls (no pandas / "
+        "no xlrd / no calamine). Because the format is not stable across runs, this stays "
+        "candidate: promote to verified only after a clean .xlsx (or CSV/HTML) export is "
+        "confirmed consistently across runs/environments (a deliberate code change).",
     ),
     # VUSA — Vanguard S&P 500 UCITS ETF USD Distributing (product-data JSON).
     IssuerSourceConfig(

@@ -19,11 +19,18 @@ from app.schemas.capability import (
     SourceCapabilityRead,
 )
 from app.schemas.common import Meta
+from app.schemas.fund_coverage import (
+    FundCoverageFundSummary,
+    FundCoverageMatrix,
+    FundCoverageRead,
+    FundCoverageSummary,
+)
 from app.schemas.source_readiness import (
     SourceReadinessMatrix,
     SourceReadinessRead,
     SourceReadinessSummary,
 )
+from app.sources import fund_source_coverage as fund_coverage
 from app.sources import issuer_source_config, registry
 from app.sources import source_readiness as readiness
 
@@ -379,6 +386,72 @@ def build_source_readiness_matrix() -> SourceReadinessMatrix:
     )
 
 
+def _fund_coverage_row(row: fund_coverage.FundCoverageRow) -> FundCoverageRead:
+    return FundCoverageRead(
+        fund_symbol=row.fund_symbol,
+        isin=row.isin,
+        issuer=row.issuer,
+        data_type=row.data_type,
+        source_name=row.source_name,
+        status=row.status,
+        live_fetch_verified=row.live_fetch_verified,
+        parse_verified=row.parse_verified,
+        stored_verified=row.stored_verified,
+        safe_for_scheduler=row.safe_for_scheduler,
+        last_verified_at=row.last_verified_at,
+        known_blocker=row.known_blocker,
+        next_action=row.next_action,
+        notes=row.notes,
+        offline_export_available=row.offline_export_available,
+    )
+
+
+def _fund_coverage_fund_summary(
+    summary: fund_coverage.FundCoverageFundSummary,
+) -> FundCoverageFundSummary:
+    return FundCoverageFundSummary(
+        fund_symbol=summary.fund_symbol,
+        issuer=summary.issuer,
+        isin=summary.isin,
+        live_price=summary.live_price,
+        live_holdings=summary.live_holdings,
+        live_distributions=summary.live_distributions,
+        live_facts=summary.live_facts,
+        live_documents=summary.live_documents,
+        data_type_status=dict(summary.data_type_status),
+        blockers=list(summary.blockers),
+    )
+
+
+def build_fund_coverage_summary() -> FundCoverageSummary:
+    """Compact target-fund coverage rollup (also embedded in capabilities)."""
+    s = fund_coverage.summary()
+    return FundCoverageSummary(
+        target_funds_total=s.target_funds_total,
+        target_funds_with_live_price=s.target_funds_with_live_price,
+        target_funds_with_live_holdings=s.target_funds_with_live_holdings,
+        target_funds_with_live_distributions=s.target_funds_with_live_distributions,
+        target_funds_with_live_facts=s.target_funds_with_live_facts,
+        target_funds_with_live_documents=s.target_funds_with_live_documents,
+        fund_sources_verified_live=s.fund_sources_verified_live,
+        fund_sources_candidate=s.fund_sources_candidate,
+        fund_sources_planned=s.fund_sources_planned,
+        fund_sources_fixture_only=s.fund_sources_fixture_only,
+        fund_source_blockers=s.fund_source_blockers,
+        funds=[_fund_coverage_fund_summary(f) for f in s.funds],
+    )
+
+
+def build_fund_coverage_matrix(fund_symbol: str | None = None) -> FundCoverageMatrix:
+    """The target-fund coverage matrix (optionally one fund) + its summary rollup."""
+    rows = [_fund_coverage_row(r) for r in fund_coverage.list_coverage_rows(fund_symbol)]
+    return FundCoverageMatrix(
+        data=rows,
+        meta=Meta(count=len(rows)),
+        summary=build_fund_coverage_summary(),
+    )
+
+
 def build_capabilities() -> CapabilitiesResponse:
     from app import __version__
 
@@ -440,4 +513,5 @@ def build_capabilities() -> CapabilitiesResponse:
         ],
         sources=sources,
         source_readiness=build_source_readiness_summary(),
+        fund_coverage=build_fund_coverage_summary(),
     )

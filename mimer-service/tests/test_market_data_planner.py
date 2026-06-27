@@ -99,6 +99,48 @@ async def test_plan_reports_missing_holdings(session: AsyncSession) -> None:
     assert holdings_items, "a held fund with no holdings snapshot should be flagged"
 
 
+async def test_plan_surfaces_target_fund_followons(session: AsyncSession) -> None:
+    # The seeded workspace holds the target funds (VUSA/ISF/JEPG) on seed-provenance facts.
+    # The planner must make the consequence chain visible: a refresh_fund_facts follow-on for
+    # each target fund (seed/placeholder provenance) is the prerequisite the cascade hangs off.
+    from app.db.models import Fund
+
+    wid = await _default_workspace_id(session)
+    plan = await market_data_planner.build_plan(session, wid, include_constituents=True)
+    facts = {i.related_fund_id for i in plan.items if i.item_type == "refresh_fund_facts"}
+    target_isins = {"IE00B3XXRP09", "IE0005042456", "IE0003UVYC20"}
+    target_ids = {
+        f.id
+        for f in (await session.execute(select(Fund).where(Fund.isin.in_(target_isins)))).scalars()
+    }
+    assert target_ids <= facts, "every seed-provenance target fund needs a refresh_fund_facts item"
+
+
+async def test_holdings_refresh_recommends_live_source_for_isf(session: AsyncSession) -> None:
+    # A holdings refresh for ISF must recommend the verified live issuer source (not just the
+    # fixture) — the holdings → identity → price → exposure cascade hangs off this source choice.
+    from datetime import date
+
+    from app.db.models import Fund, FundHolding
+
+    isf = await session.scalar(select(Fund).where(Fund.isin == "IE0005042456"))
+    assert isf is not None
+    # Age ISF's holdings snapshot so the planner emits a refresh_holdings follow-on.
+    for holding in (
+        await session.execute(select(FundHolding).where(FundHolding.fund_id == isf.id))
+    ).scalars():
+        holding.as_of_date = date(2020, 1, 1)
+    await session.commit()
+
+    wid = await _default_workspace_id(session)
+    plan = await market_data_planner.build_plan(session, wid, include_constituents=True)
+    refresh = [
+        i for i in plan.items if i.item_type == "refresh_holdings" and i.related_fund_id == isf.id
+    ]
+    assert refresh, "stale ISF holdings should produce a refresh_holdings follow-on"
+    assert "blackrock_ishares_holdings" in refresh[0].source_candidates
+
+
 async def test_plan_does_not_touch_network(session: AsyncSession, monkeypatch) -> None:
     # Hard guarantee: building a plan performs no HTTP I/O.
     import httpx

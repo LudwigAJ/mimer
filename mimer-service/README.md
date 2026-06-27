@@ -1799,6 +1799,37 @@ curl -s "http://localhost:8080/api/v1/data-sources/readiness?scheduler_safe=true
 curl -s "http://localhost:8080/api/v1/data-sources/readiness?status=candidate"
 ```
 
+### Target-fund coverage (VUSA / ISF / JEPG)
+
+Where the readiness matrix is keyed by *source*, the **fund coverage matrix**
+(`app/sources/fund_source_coverage.py`) is keyed by *(fund, data type)* — for the three
+target funds and the six data types (facts / listing price / NAV / holdings / distributions /
+documents): *can the backend fetch/parse/store it live, is it scheduler-safe, or what blocks
+it?* A pure composition of the readiness + issuer-config registries (never drifts), exposed at
+**`GET /api/v1/data-sources/fund-coverage`** (`?fund_symbol=VUSA`), summarised in
+`GET /api/v1/capabilities` (`fund_coverage`) and counted in diagnostics
+(`target_funds_with_live_price` / `…_holdings` / `…_distributions` / `…_facts` /
+`…_documents` / `fund_sources_verified_live` / `fund_sources_fixture_only` /
+`fund_source_blockers`). Honest state today (a 2026-06-27 bounded `verify_fund_sources` run):
+**ISF holdings verified-live** (108 holdings); **JEPG holdings fetched & parsed live as OOXML
+`.xlsx`** (247 holdings) but its 2026-06-25 fetch was a binary `.xls`, so the format is unstable
+across runs and it stays a `candidate` (promotion waits for a stable re-verify); VUSA/JEPG
+**distributions** are blocked candidates (TLS / no verified URL); **Stooq did not return a clean
+EOD CSV** for the LSE ETF symbols (404 / HTML interstitial — confirm the symbol or use yfinance),
+so listing prices stay `implemented_live` but unverified for these tickers; facts/documents are
+fixture-fed (not live); **NAV is `planned`** and is never conflated with the listing close.
+
+The `verify_fund_sources` worker runs **bounded, safe** live checks per fund (one guarded
+Stooq fetch for the listing, one guarded issuer fetch+parse for holdings/distributions when a
+usable config exists, honest `skipped_no_live_source` for facts/NAV/documents). It stores
+nothing, promotes nothing, and a blocked provider never fails the run:
+
+```bash
+curl -s "http://localhost:8080/api/v1/data-sources/fund-coverage?fund_symbol=ISF"
+uv run python -m app.workers.run verify_fund_sources --fund-symbol ISF --limit 10
+uv run python -m app.workers.run verify_fund_sources --all-target-funds --limit 10
+```
+
 ### Scheduler worker
 
 ```bash

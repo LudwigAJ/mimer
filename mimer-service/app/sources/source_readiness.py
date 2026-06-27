@@ -258,14 +258,16 @@ _ROWS: tuple[SourceReadinessRow, ...] = (
         provider="J.P. Morgan Asset Management",
         status=CANDIDATE,
         worker_name="issuer_holdings_ingestion",
-        recommended_cadence="not scheduled (blocked)",
+        recommended_cadence="not scheduled (format varies across runs)",
         safe_for_scheduler=False,
         requires_url_config=True,
-        known_blockers="JEPG returns a legacy binary .xls (OLE2) body -> reason="
-        "binary_unsupported (the stdlib parses CSV/TSV/HTML-table + OOXML .xlsx, not old "
-        "binary .xls; no pandas/xlrd/calamine).",
-        next_action="verify a CSV / HTML-table / .xlsx export variant of the daily ETF "
-        "holdings endpoint before promoting/scheduling.",
+        known_blockers="JEPG export FORMAT VARIES across runs: a 2026-06-27 bounded live "
+        "verify returned a clean OOXML .xlsx (247 holdings, parseable) but a 2026-06-25 "
+        "fetch returned a legacy binary .xls (OLE2 -> binary_unsupported; the stdlib parses "
+        ".xlsx/CSV/TSV/HTML-table but not old binary .xls). Not reliably verified across runs.",
+        next_action="re-verify for stability (the endpoint returned .xlsx on 2026-06-27 vs "
+        "binary .xls on 2026-06-25); promote to verified_live + scheduler-safe once a clean "
+        "machine-readable export is consistent across runs/environments.",
         example_targets=("JEPG:IE0003UVYC20",),
     ),
     SourceReadinessRow(

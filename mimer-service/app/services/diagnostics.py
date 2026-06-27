@@ -1062,6 +1062,26 @@ async def _apply_source_readiness_diagnostics(session: AsyncSession, diag: Diagn
     diag.stale_live_data_types = sum(1 for count in stale_by_data_type.values() if count > 0)
 
 
+def _apply_fund_coverage_diagnostics(diag: Diagnostics) -> None:
+    """Target-fund (VUSA/ISF/JEPG) live-coverage counts (pure; no DB, shared/global).
+
+    Read straight off the in-code fund coverage matrix (cheap + deterministic), so a
+    fixture-fed data type is never mistaken for live coverage."""
+    from app.sources import fund_source_coverage as fund_coverage
+
+    s = fund_coverage.summary()
+    diag.target_funds_total = s.target_funds_total
+    diag.target_funds_with_live_price = s.target_funds_with_live_price
+    diag.target_funds_with_live_holdings = s.target_funds_with_live_holdings
+    diag.target_funds_with_live_distributions = s.target_funds_with_live_distributions
+    diag.target_funds_with_live_facts = s.target_funds_with_live_facts
+    diag.target_funds_with_live_documents = s.target_funds_with_live_documents
+    diag.fund_sources_verified_live = s.fund_sources_verified_live
+    diag.fund_sources_candidate = s.fund_sources_candidate
+    diag.fund_sources_fixture_only = s.fund_sources_fixture_only
+    diag.fund_source_blockers = s.fund_source_blockers
+
+
 async def global_diagnostics(session: AsyncSession) -> Diagnostics:
     diag = await _compute(
         session,
@@ -1078,6 +1098,7 @@ async def global_diagnostics(session: AsyncSession) -> Diagnostics:
     await _apply_portfolio_valuation_diagnostics(session, diag, workspace_id=None)
     await _apply_reference_rate_diagnostics(session, diag)
     await _apply_source_readiness_diagnostics(session, diag)
+    _apply_fund_coverage_diagnostics(diag)
     return diag
 
 
@@ -1101,4 +1122,5 @@ async def workspace_diagnostics(session: AsyncSession, workspace_id: int) -> Wor
     await _apply_portfolio_valuation_diagnostics(session, diag, workspace_id=workspace_id)
     await _apply_reference_rate_diagnostics(session, diag)
     await _apply_source_readiness_diagnostics(session, diag)
+    _apply_fund_coverage_diagnostics(diag)
     return diag

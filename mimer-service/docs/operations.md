@@ -241,9 +241,18 @@ docker compose run --rm api uv run python -m app.workers.run \
 # Live ECB rates (explicit; budget-guarded):
 docker compose run --rm api uv run python -m app.workers.run \
   rates_ingestion --source ecb_rates --limit 100
+
+# Bounded, safe live verification of a target fund's sources (VUSA/ISF/JEPG).
+# Verify-only: stores nothing, promotes nothing, a blocked provider never fails it.
+docker compose run --rm api uv run python -m app.workers.run \
+  verify_fund_sources --fund-symbol ISF --limit 10
+docker compose run --rm api uv run python -m app.workers.run \
+  verify_fund_sources --all-target-funds --limit 10
 ```
 
-See the README for the full worker catalogue and flags.
+See the README for the full worker catalogue and flags. Per-fund live readiness for
+VUSA/ISF/JEPG is at `GET /api/v1/data-sources/fund-coverage` (full detail in
+`docs/data_sources.md` § *Target-fund coverage*).
 
 ### Scheduler
 

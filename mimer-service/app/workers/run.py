@@ -78,6 +78,12 @@
     # portfolio_valuation_recompute scope flags (consume already-ingested prices/FX
     # only — no fetch, no resolver, no PnL):
     #   --as-of-date 2026-06-25  --base-currency GBP  --broker-account-id 1  --force
+    # verify_fund_sources: bounded, safe live verification of a target fund's data
+    # sources (VUSA/ISF/JEPG). Verify-only — never stores, never promotes; a blocked
+    # provider never fails the run:
+    uv run python -m app.workers.run verify_fund_sources --fund-symbol ISF --limit 10
+    uv run python -m app.workers.run verify_fund_sources --fund-symbol VUSA
+    uv run python -m app.workers.run verify_fund_sources --all-target-funds --limit 10
 
 `price_ingestion`, `issuer_facts_ingestion`, `distribution_ingestion`,
 `issuer_holdings_ingestion`, `fx_ingestion` and `document_snapshot_ingestion` are
@@ -117,6 +123,7 @@ from app.services import constituent_identity as constituent_identity_service
 from app.services import distributions_ingestion as distributions_service
 from app.services import document_ingestion as documents_service
 from app.services import exposure_recompute as exposure_service
+from app.services import fund_source_verification as fund_verification_service
 from app.services import fx_ingestion as fx_service
 from app.services import holdings_ingestion as holdings_service
 from app.services import instrument_onboarding as onboarding_service
@@ -153,6 +160,7 @@ BROKER_IMPORT_JOB = "broker_csv_import"
 IMPORTED_RESOLUTION_JOB = "imported_instrument_resolution"
 RATES_JOB = "rates_ingestion"
 PORTFOLIO_VALUATION_JOB = "portfolio_valuation_recompute"
+VERIFY_FUND_SOURCES_JOB = "verify_fund_sources"
 
 
 async def run_job(
@@ -186,6 +194,8 @@ async def run_job(
     as_of_date: date | None = None,
     url: str | None = None,
     verify_source: bool = False,
+    fund_symbol: str | None = None,
+    all_target_funds: bool = False,
 ) -> JobRun:
     if job_type == PRICE_JOB:
         return await _run_price_ingestion(
@@ -339,6 +349,14 @@ async def run_job(
             broker_account_id=broker_account_id,
             limit=limit,
             force=force,
+        )
+    if job_type == VERIFY_FUND_SOURCES_JOB:
+        return await _run_verify_fund_sources(
+            session,
+            scheduled_job_id=scheduled_job_id,
+            fund_symbol=fund_symbol,
+            all_target_funds=all_target_funds,
+            limit=limit,
         )
     return await _run_stub(session, job_type, scheduled_job_id=scheduled_job_id)
 
@@ -707,6 +725,76 @@ async def _run_source_verification(
         run.status = "failed"
     run.message = report.message()
     run.finished_at = datetime.now(UTC)
+    await session.commit()
+    await session.refresh(run)
+    return run
+
+
+async def _run_verify_fund_sources(
+    session: AsyncSession,
+    *,
+    scheduled_job_id: int | None,
+    fund_symbol: str | None,
+    all_target_funds: bool,
+    limit: int | None,
+) -> JobRun:
+    """Bounded, safe live verification of the target funds' data sources (no ingestion).
+
+    Runs ``fund_source_verification.verify_fund_sources`` for one ``--fund-symbol`` or
+    ``--all-target-funds`` and folds the report into the job_run. Verify-only: nothing
+    is stored and nothing is promoted, so ``inserted``/``updated`` stay 0; a blocked
+    provider (binary .xls / TLS / no config) never fails the run — only a genuine live
+    fetch failure shows as ``records_failed`` (and flips a run with no live success to
+    ``partial_success``). The only side effects are the fetch logs ``guarded_fetch``
+    writes. ``--limit`` bounds how many funds are verified."""
+    now = datetime.now(UTC)
+    run = JobRun(
+        job_type=VERIFY_FUND_SOURCES_JOB,
+        scheduled_job_id=scheduled_job_id,
+        status="running",
+        started_at=now,
+    )
+    session.add(run)
+    await session.flush()
+
+    # An explicit --fund-symbol that is not a target fund is a clean, honest failure.
+    if (
+        fund_symbol is not None
+        and fund_verification_service.fund_coverage.get_target_fund(fund_symbol) is None
+    ):
+        run.status = "failed"
+        run.message = (
+            f"{fund_symbol!r} is not a target fund "
+            f"(known: {', '.join(fund_verification_service.fund_coverage.TARGET_FUND_SYMBOLS)})"
+        )
+        run.finished_at = datetime.now(UTC)
+        await session.commit()
+        await session.refresh(run)
+        return run
+
+    report = await fund_verification_service.verify_fund_sources(
+        session,
+        fund_symbol=fund_symbol,
+        all_target_funds=all_target_funds,
+        limit=limit,
+    )
+
+    run.records_inserted = 0  # verify-only: nothing is stored
+    run.records_updated = 0
+    run.records_failed = report.fetch_error_count  # genuine live fetch failures only
+    if report.verified_count or report.attempted_live_count == 0:
+        run.status = "success"
+    elif report.fetch_error_count:
+        # Live attempts were made but none confirmed and at least one failed.
+        run.status = "partial_success"
+    else:
+        run.status = "success"
+    run.message = report.message()
+    run.finished_at = datetime.now(UTC)
+    if scheduled_job_id is not None:
+        scheduled = await session.get(ScheduledJob, scheduled_job_id)
+        if scheduled is not None:
+            scheduled.last_run_at = run.finished_at
     await session.commit()
     await session.refresh(run)
     return run
@@ -2029,6 +2117,8 @@ async def _amain(
     as_of_date: date | None,
     url: str | None,
     verify_source: bool,
+    fund_symbol: str | None,
+    all_target_funds: bool,
 ) -> None:
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session:
@@ -2061,6 +2151,8 @@ async def _amain(
             as_of_date=as_of_date,
             url=url,
             verify_source=verify_source,
+            fund_symbol=fund_symbol,
+            all_target_funds=all_target_funds,
         )
         print(
             f"job_run={run.id} type={run.job_type} status={run.status} "
@@ -2129,6 +2221,9 @@ def main() -> None:
     # issuer_holdings_ingestion / distribution_ingestion only: verify-only mode —
     # one guarded live fetch+parse of the known/--url source config, no ingestion.
     parser.add_argument("--verify-source", dest="verify_source", action="store_true")
+    # verify_fund_sources only: which target fund(s) to bounded-verify live.
+    parser.add_argument("--fund-symbol", dest="fund_symbol", default=None)
+    parser.add_argument("--all-target-funds", dest="all_target_funds", action="store_true")
     args = parser.parse_args()
     start_date = date.fromisoformat(args.start_date) if args.start_date else None
     end_date = date.fromisoformat(args.end_date) if args.end_date else None
@@ -2162,6 +2257,8 @@ def main() -> None:
             as_of_date,
             args.url,
             args.verify_source,
+            args.fund_symbol,
+            args.all_target_funds,
         )
     )
 

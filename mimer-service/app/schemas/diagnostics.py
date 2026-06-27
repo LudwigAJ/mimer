@@ -280,6 +280,22 @@ class Diagnostics(BaseModel):
     fixture_scheduled_jobs: int = 0
     live_source_failures: int = 0
     stale_live_data_types: int = 0
+    # Target-fund (VUSA/ISF/JEPG) live-coverage rollup (the per-fund honesty layer — see
+    # app/sources/fund_source_coverage.py). Pure + deterministic from the in-code coverage
+    # matrix: how many target funds have a *live* (implemented/verified) source per data type,
+    # and the source-status spread across all target-fund cells. ``target_funds_with_live_*``
+    # never counts a fixture as live; ``fund_source_blockers`` counts candidate/planned cells
+    # carrying a concrete blocker. Informational readiness — never an alert.
+    target_funds_total: int = 0
+    target_funds_with_live_price: int = 0
+    target_funds_with_live_holdings: int = 0
+    target_funds_with_live_distributions: int = 0
+    target_funds_with_live_facts: int = 0
+    target_funds_with_live_documents: int = 0
+    fund_sources_verified_live: int = 0
+    fund_sources_candidate: int = 0
+    fund_sources_fixture_only: int = 0
+    fund_source_blockers: int = 0
     # Portfolio valuation/readiness coverage (workspace-scoped from the latest
     # valuation snapshot; the global view sums across workspaces). These are a
     # bounded read model over already-ingested prices/FX — NOT PnL. ``positions`` is

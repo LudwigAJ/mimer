@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from app.schemas.common import ORMModel
+from app.schemas.fund_coverage import FundCoverageSummary
 from app.schemas.source_readiness import SourceReadinessSummary
 
 
@@ -75,3 +76,7 @@ class CapabilitiesResponse(BaseModel):
     # Production data-source readiness rollup: makes it obvious what is fixture-only vs live
     # verified vs candidate vs planned, and which sources are safe to put on the scheduler.
     source_readiness: SourceReadinessSummary
+    # Target-fund (VUSA/ISF/JEPG) live-coverage rollup: per data type (facts / listing price /
+    # NAV / holdings / distributions / documents), which funds have live coverage and which are
+    # blocked. Lets the GUI show per-fund readiness without conflating fixture with live.
+    fund_coverage: FundCoverageSummary
