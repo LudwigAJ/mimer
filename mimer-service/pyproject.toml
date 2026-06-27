@@ -1,0 +1,49 @@
+[project]
+name = "mimer-service"
+version = "0.1.0"
+description = "ETF / portfolio analytics backend service (FastAPI + Postgres)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.18.4",
+    "asyncpg>=0.31.0",
+    "fastapi>=0.138.0",
+    "greenlet>=3.0.0",
+    # Outbound HTTP for the resolver (OpenFIGI) and price source adapters.
+    "httpx>=0.28.1",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.2",
+    "sqlalchemy>=2.0.51",
+    "uvicorn>=0.49.0",
+]
+
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.20.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.0.0",
+    "ruff>=0.15.18",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Claude Code skill scripts are vendored tooling, not part of the service.
+extend-exclude = [".claude"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# Embedded offline constituent fixture: a wide pipe-delimited data table whose
+# rows necessarily exceed the line length. Code in the module stays <100.
+"app/sources/constituents.py" = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = ["ignore::DeprecationWarning"]

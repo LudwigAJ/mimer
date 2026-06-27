@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────────────────────
+# OS / editor cruft
+# ─────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ─────────────────────────────────────────────────────────────
+# Secrets & environment files — never commit, at ANY depth
+# ─────────────────────────────────────────────────────────────
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+secrets.*
+
+# ...but DO keep templates / examples
+!.env.example
+!.env.sample
+!.env.template
+!.env.dist
+
+# ─────────────────────────────────────────────────────────────
+# Python  (mimer-service)
+# ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+
+# Virtual environments (any depth)
+.venv/
+venv/
+virtualenv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.uv-cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local databases & logical dumps (may contain real data)
+*.sqlite
+*.sqlite3
+*.db
+backups/
+
+# ─────────────────────────────────────────────────────────────
+# Rust / egui  (mimer-gui)
+# ─────────────────────────────────────────────────────────────
+target/
+/mimer-gui/references
+/mimer-gui/figma-to-egui-mimer.md
+
+# ─────────────────────────────────────────────────────────────
+# Logs
+# ─────────────────────────────────────────────────────────────
+*.log

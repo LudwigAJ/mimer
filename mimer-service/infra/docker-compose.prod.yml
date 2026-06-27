@@ -1,0 +1,49 @@
+# Production / VPS override. Layer it on top of the base compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# It hardens the base setup for a private VPS:
+#   * the API is bound to 127.0.0.1 only — put a reverse proxy / tunnel
+#     (Caddy, nginx, Tailscale, Cloudflare Tunnel) in front of it for any
+#     internet-facing access. The compose stack is NOT public-internet safe by
+#     itself (no built-in auth — see docs/operations.md § Security).
+#   * Postgres keeps no host port at all (reachable only on the internal network).
+#   * stricter restart policy + log rotation so a long-running box does not fill
+#     the disk with container logs.
+
+services:
+  postgres:
+    # Drop the host port entirely in production — nothing outside the compose
+    # network ever needs to reach Postgres directly. `!reset` removes the base
+    # file's published port during the override merge (Compose merges `ports`
+    # by appending, so a plain `ports: []` would NOT remove it).
+    ports: !reset []
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  api:
+    restart: always
+    # `!override` REPLACES the base file's port list instead of merging into it.
+    # Compose merges `ports` by appending, so without !override the base file's
+    # public ``${API_PORT}:8080`` (0.0.0.0) binding would survive and the API
+    # would stay publicly exposed alongside this localhost-only one. Bound to
+    # 127.0.0.1 so the VPS's existing Caddy proxies to it; set API_BIND_HOST=
+    # 0.0.0.0 only if you front it some other way.
+    ports: !override
+      - "${API_BIND_HOST:-127.0.0.1}:${API_PORT:-8080}:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  scheduler:
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

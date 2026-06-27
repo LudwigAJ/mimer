@@ -1,0 +1,22 @@
+.git
+.venv
+__pycache__/
+*.py[oc]
+.pytest_cache/
+.ruff_cache/
+.uv-cache/
+*.sqlite
+*.sqlite3
+.env
+*.env
+!*.env.example
+infra/.env
+# Docs / tooling / tests are not needed in the runtime image.
+*.md
+docs/
+infra/
+scripts/
+backups/
+tests/
+.claude/
+.github/

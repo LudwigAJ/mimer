@@ -1,0 +1,127 @@
+# Local development / VPS Docker Compose (base file).
+#
+#   cd infra && cp .env.example .env   # then edit secrets
+#   docker compose up -d postgres      # start the database
+#   docker compose run --rm migrate    # apply migrations (explicit, idempotent)
+#   docker compose up -d --build api   # start the API
+#
+# Postgres is bound to localhost only and is never exposed publicly.
+# For an internet-facing VPS, layer docker-compose.prod.yml on top (see
+# docs/operations.md) and put a reverse proxy / tunnel in front of the API.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-etf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-etf_password}
+      POSTGRES_DB: ${POSTGRES_DB:-etf_data}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Bound to localhost only — not reachable from other hosts.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-etf} -d ${POSTGRES_DB:-etf_data}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - mimer
+
+  # One-shot migration runner. Same image + env as the API. Run it explicitly
+  # before (re)starting the API:  docker compose run --rm migrate
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: mimer-service:latest
+    restart: "no"
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-etf}:${POSTGRES_PASSWORD:-etf_password}@postgres:5432/${POSTGRES_DB:-etf_data}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mimer
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: mimer-service:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override so the API targets the postgres service inside the network.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-etf}:${POSTGRES_PASSWORD:-etf_password}@postgres:5432/${POSTGRES_DB:-etf_data}
+      # Shared Bearer token for /api/v1. Interpolated from the shell env first,
+      # else infra/.env, else empty (= auth disabled). Explicit here (not only via
+      # env_file) so `MIMER_API_TOKEN=... docker compose up api` reaches the
+      # container. Blank value => unauthenticated local dev. Never logged.
+      MIMER_API_TOKEN: ${MIMER_API_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      # Host port configurable via API_PORT; container always listens on 8080.
+      - "${API_PORT:-8080}:8080"
+    healthcheck:
+      test:
+        ["CMD", "python", "-c",
+         "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - mimer
+
+  # Optional in-process scheduler (claims + leases due scheduled_jobs and runs
+  # them). Opt-in:  docker compose --profile scheduler up -d scheduler
+  scheduler:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: mimer-service:latest
+    restart: unless-stopped
+    # Use an `entrypoint` (not `command`) so extra args passed to
+    # `docker compose run --rm scheduler ...` (e.g. `--once`, `--poll-seconds N`)
+    # APPEND to the invocation instead of replacing it — `compose run` overrides
+    # `command` but not `entrypoint`. With no extra args (the `scheduler` profile
+    # `up -d`), it runs the long-lived poll loop.
+    entrypoint: ["uv", "run", "python", "-m", "app.workers.scheduler"]
+    command: []
+    # The image-level HEALTHCHECK probes the HTTP API on :8080. The scheduler is
+    # a plain loop with no HTTP server, so that check would always fail and mark
+    # this container "unhealthy". Disable it here (liveness is the process itself;
+    # `restart: unless-stopped` handles crashes).
+    healthcheck:
+      disable: true
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-etf}:${POSTGRES_PASSWORD:-etf_password}@postgres:5432/${POSTGRES_DB:-etf_data}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    profiles:
+      - scheduler
+    networks:
+      - mimer
+
+volumes:
+  pgdata:
+
+networks:
+  mimer:
+    driver: bridge
