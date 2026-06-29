@@ -8,6 +8,7 @@ use crate::format::{fmt_date_str, fmt_optional};
 use crate::pages::{format_money, format_number, format_pct, header_cell};
 use crate::table_state::{ColumnDescriptor, TableId, TableLayoutRegistry, TableState};
 use crate::timeseries::{TimeSeries, TimeSeriesKind, find_series};
+use crate::ui::documents as document_ui;
 use crate::ui::metrics;
 use crate::ui::style;
 use crate::ui::table_layout::{managed_column, managed_table_revision, table_layout_controls};
@@ -182,17 +183,28 @@ enum FundDistributionColumn {
     ExDate,
     Payment,
     Amount,
+    Currency,
     Status,
     Source,
 }
 
 impl FundDistributionColumn {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::ExDate,
         Self::Payment,
         Self::Amount,
+        Self::Currency,
         Self::Status,
         Self::Source,
+    ];
+
+    const DESCRIPTORS: [ColumnDescriptor; 6] = [
+        ColumnDescriptor::new("ex_date", "Ex-date", 96.0, 76.0, 180.0).required(),
+        ColumnDescriptor::new("payment_date", "Pay date", 104.0, 84.0, 190.0),
+        ColumnDescriptor::new("amount", "Amount", 88.0, 68.0, 160.0).required(),
+        ColumnDescriptor::new("currency", "Ccy", 64.0, 52.0, 100.0),
+        ColumnDescriptor::new("status", "Status", 92.0, 72.0, 160.0).required(),
+        ColumnDescriptor::new("source", "Source", 112.0, 88.0, 220.0).required(),
     ];
 
     fn index(self) -> usize {
@@ -207,6 +219,7 @@ impl FundDistributionColumn {
             Self::ExDate => "ex_date",
             Self::Payment => "payment_date",
             Self::Amount => "amount",
+            Self::Currency => "currency",
             Self::Status => "status",
             Self::Source => "source",
         }
@@ -223,6 +236,7 @@ impl FundDistributionColumn {
                 format_money(&distribution.currency, distribution.amount),
                 distribution.amount.to_string(),
             ),
+            Self::Currency => (distribution.currency.clone(), distribution.currency.clone()),
             Self::Status => (distribution.status.clone(), distribution.status.clone()),
             Self::Source => (distribution.source.clone(), distribution.source.clone()),
         }
@@ -234,17 +248,35 @@ enum FundDocumentColumn {
     DocumentType,
     LatestDate,
     Status,
+    Source,
     Change,
     LastChecked,
+    Url,
 }
 
 impl FundDocumentColumn {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 7] = [
         Self::DocumentType,
         Self::LatestDate,
         Self::Status,
+        Self::Source,
         Self::Change,
         Self::LastChecked,
+        Self::Url,
+    ];
+
+    const DESCRIPTORS: [ColumnDescriptor; 7] = [
+        ColumnDescriptor::new("document_type", "Type", 138.0, 100.0, 280.0)
+            .required()
+            .clipped(),
+        ColumnDescriptor::new("latest_date", "Publication", 108.0, 86.0, 190.0),
+        ColumnDescriptor::new("status", "Status", 94.0, 74.0, 160.0).required(),
+        ColumnDescriptor::new("source", "Source", 112.0, 88.0, 220.0).required(),
+        ColumnDescriptor::new("change", "Change", 138.0, 104.0, 280.0).clipped(),
+        ColumnDescriptor::new("last_checked", "Last checked", 126.0, 100.0, 220.0),
+        ColumnDescriptor::new("url", "URL / path", 240.0, 160.0, 520.0)
+            .hidden_by_default()
+            .clipped(),
     ];
 
     fn index(self) -> usize {
@@ -259,8 +291,10 @@ impl FundDocumentColumn {
             Self::DocumentType => "document_type",
             Self::LatestDate => "latest_date",
             Self::Status => "status",
+            Self::Source => "source",
             Self::Change => "change",
             Self::LastChecked => "last_checked",
+            Self::Url => "url",
         }
     }
 
@@ -269,8 +303,10 @@ impl FundDocumentColumn {
             Self::DocumentType => document.document_type.clone(),
             Self::LatestDate => document.latest_date.clone(),
             Self::Status => document.status.clone(),
+            Self::Source => document.source.clone(),
             Self::Change => document.content_hash_change.clone(),
             Self::LastChecked => document.last_checked.clone(),
+            Self::Url => document_ui::document_uri(document),
         };
         (value.clone(), value)
     }
@@ -456,7 +492,8 @@ fn tab_content(
             price_chart_panel(ui, fund, selected_listing_id, &snapshot.time_series)
         }
         FundDetailTab::Distributions => {
-            let row_action = related_distributions(ui, &snapshot.distributions, fund, state);
+            let row_action =
+                related_distributions(ui, &snapshot.distributions, fund, state, layouts);
             row_action.or_else(|| {
                 selected_listing(fund, selected_listing_id).and_then(|listing| {
                     if ui.button("Plot Distributions").clicked() {
@@ -472,7 +509,9 @@ fn tab_content(
             })
         }
         FundDetailTab::Holdings => related_holdings(ui, &snapshot.holdings, fund, state, layouts),
-        FundDetailTab::Documents => related_documents(ui, &snapshot.documents, fund, state),
+        FundDetailTab::Documents => {
+            related_documents(ui, &snapshot.documents, fund, state, layouts)
+        }
         FundDetailTab::Jobs => {
             related_jobs(ui, &snapshot.job_runs);
             None
@@ -568,7 +607,10 @@ pub fn handle_keyboard(
                 ctx,
                 &mut state.distributions_table,
                 &indices,
-                &(0..FundDistributionColumn::ALL.len()).collect::<Vec<_>>(),
+                &layouts.visible_indices(
+                    TableId::FundDetailDistributions,
+                    &FundDistributionColumn::DESCRIPTORS,
+                ),
             );
             state.active_table = Some(TableId::FundDetailDistributions);
             sync_fund_distribution_focus(&snapshot.distributions, state);
@@ -585,7 +627,10 @@ pub fn handle_keyboard(
                 ctx,
                 &mut state.documents_table,
                 &indices,
-                &(0..FundDocumentColumn::ALL.len()).collect::<Vec<_>>(),
+                &layouts.visible_indices(
+                    TableId::FundDetailDocuments,
+                    &FundDocumentColumn::DESCRIPTORS,
+                ),
             );
             state.active_table = Some(TableId::FundDetailDocuments);
             sync_fund_document_focus(&snapshot.documents, state);
@@ -1400,6 +1445,7 @@ fn related_distributions(
     distributions: &[Distribution],
     fund: &Fund,
     state: &mut FundDetailState,
+    layouts: &mut TableLayoutRegistry,
 ) -> Option<FundDetailAction> {
     ui.label(egui::RichText::new("Recent distributions").strong());
     let indices = distributions
@@ -1409,12 +1455,45 @@ fn related_distributions(
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     state.distributions_table.retain_visible(&indices);
+    let visible_row = state
+        .distributions_table
+        .focused_row_index
+        .or(state.distributions_table.selected_index())
+        .and_then(|index| distributions.get(index))
+        .map(|distribution| {
+            (
+                distribution.ex_date.as_str(),
+                layouts.visible_row_text(
+                    TableId::FundDetailDistributions,
+                    &FundDistributionColumn::DESCRIPTORS,
+                    &FundDistributionColumn::ALL
+                        .iter()
+                        .map(|column| (column.key(), column.payload(distribution).1))
+                        .collect::<Vec<_>>(),
+                ),
+            )
+        });
+    if table_layout_controls(
+        ui,
+        layouts,
+        TableId::FundDetailDistributions,
+        &FundDistributionColumn::DESCRIPTORS,
+        state
+            .distributions_table
+            .focused_column_index
+            .and_then(|index| FundDistributionColumn::ALL.get(index))
+            .map(|column| column.key()),
+        visible_row,
+    ) {
+        state.distributions_table.clear_focus();
+    }
     compact_distribution_table(
         ui,
         "fund_detail_distributions",
         distributions,
         &indices,
         state,
+        layouts,
     );
     None
 }
@@ -1676,6 +1755,7 @@ fn related_documents(
     documents: &[DocumentSnapshot],
     fund: &Fund,
     state: &mut FundDetailState,
+    layouts: &mut TableLayoutRegistry,
 ) -> Option<FundDetailAction> {
     ui.label(egui::RichText::new("Documents").strong());
     let indices = documents
@@ -1685,20 +1765,61 @@ fn related_documents(
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     state.documents_table.retain_visible(&indices);
+    let visible_row = state
+        .documents_table
+        .focused_row_index
+        .or(state.documents_table.selected_index())
+        .and_then(|index| documents.get(index))
+        .map(|document| {
+            (
+                document.document_type.as_str(),
+                layouts.visible_row_text(
+                    TableId::FundDetailDocuments,
+                    &FundDocumentColumn::DESCRIPTORS,
+                    &FundDocumentColumn::ALL
+                        .iter()
+                        .map(|column| (column.key(), column.payload(document).1))
+                        .collect::<Vec<_>>(),
+                ),
+            )
+        });
+    if table_layout_controls(
+        ui,
+        layouts,
+        TableId::FundDetailDocuments,
+        &FundDocumentColumn::DESCRIPTORS,
+        state
+            .documents_table
+            .focused_column_index
+            .and_then(|index| FundDocumentColumn::ALL.get(index))
+            .map(|column| column.key()),
+        visible_row,
+    ) {
+        state.documents_table.clear_focus();
+    }
     let mut action = None;
-    TableBuilder::new(ui)
-        .id_salt("fund_detail_documents")
+    let revision = managed_table_revision(
+        layouts,
+        TableId::FundDetailDocuments,
+        &FundDocumentColumn::DESCRIPTORS,
+    );
+    let mut table = TableBuilder::new(ui)
+        .id_salt(("fund_detail_documents", revision))
         .striped(true)
-        .resizable(true)
-        .max_scroll_height(160.0)
-        .column(Column::initial(126.0).at_least(96.0))
-        .column(Column::initial(104.0).at_least(82.0))
-        .column(Column::initial(94.0).at_least(74.0))
-        .column(Column::initial(138.0).at_least(104.0).clip(true))
-        .column(Column::remainder().at_least(120.0))
+        .resizable(false)
+        .max_scroll_height(160.0);
+    for descriptor in FundDocumentColumn::DESCRIPTORS {
+        table = table.column(managed_column(
+            layouts,
+            TableId::FundDetailDocuments,
+            &FundDocumentColumn::DESCRIPTORS,
+            descriptor,
+        ));
+    }
+    table
         .header(metrics::TABLE_HEADER_HEIGHT, |mut header| {
-            for label in ["Type", "Latest date", "Status", "Change", "Last checked"] {
-                header.col(|ui| header_cell(ui, label));
+            for descriptor in FundDocumentColumn::DESCRIPTORS {
+                header.col(|ui| header_cell(ui, descriptor.label));
             }
         })
         .body(|mut body| {
@@ -1759,6 +1880,15 @@ fn related_documents(
                             ui,
                             state
                                 .documents_table
+                                .is_focused_cell(index, FundDocumentColumn::Source.index()),
+                        );
+                        style::source_badge(ui, &document.source);
+                    });
+                    row.col(|ui| {
+                        style::focused_table_cell(
+                            ui,
+                            state
+                                .documents_table
                                 .is_focused_cell(index, FundDocumentColumn::Change.index()),
                         );
                         ui.label(&document.content_hash_change);
@@ -1772,6 +1902,15 @@ fn related_documents(
                         );
                         ui.label(fmt_date_str(&document.last_checked));
                     });
+                    row.col(|ui| {
+                        style::focused_table_cell(
+                            ui,
+                            state
+                                .documents_table
+                                .is_focused_cell(index, FundDocumentColumn::Url.index()),
+                        );
+                        ui.monospace(document_ui::document_uri(document));
+                    });
                 });
             }
         });
@@ -1784,20 +1923,30 @@ fn compact_distribution_table(
     distributions: &[Distribution],
     indices: &[usize],
     state: &mut FundDetailState,
+    layouts: &mut TableLayoutRegistry,
 ) {
-    TableBuilder::new(ui)
-        .id_salt(id)
+    let revision = managed_table_revision(
+        layouts,
+        TableId::FundDetailDistributions,
+        &FundDistributionColumn::DESCRIPTORS,
+    );
+    let mut table = TableBuilder::new(ui)
+        .id_salt((id, revision))
         .striped(true)
-        .resizable(true)
-        .max_scroll_height(140.0)
-        .column(Column::initial(90.0).at_least(74.0))
-        .column(Column::initial(104.0).at_least(86.0))
-        .column(Column::initial(80.0).at_least(64.0))
-        .column(Column::initial(88.0).at_least(70.0))
-        .column(Column::remainder().at_least(100.0))
+        .resizable(false)
+        .max_scroll_height(140.0);
+    for descriptor in FundDistributionColumn::DESCRIPTORS {
+        table = table.column(managed_column(
+            layouts,
+            TableId::FundDetailDistributions,
+            &FundDistributionColumn::DESCRIPTORS,
+            descriptor,
+        ));
+    }
+    table
         .header(metrics::TABLE_HEADER_HEIGHT, |mut header| {
-            for label in ["Ex-date", "Payment", "Amount", "Status", "Source"] {
-                header.col(|ui| header_cell(ui, label));
+            for descriptor in FundDistributionColumn::DESCRIPTORS {
+                header.col(|ui| header_cell(ui, descriptor.label));
             }
         })
         .body(|mut body| {
@@ -1854,6 +2003,15 @@ fn compact_distribution_table(
                             ui,
                             state
                                 .distributions_table
+                                .is_focused_cell(index, FundDistributionColumn::Currency.index()),
+                        );
+                        ui.label(&distribution.currency);
+                    });
+                    row.col(|ui| {
+                        style::focused_table_cell(
+                            ui,
+                            state
+                                .distributions_table
                                 .is_focused_cell(index, FundDistributionColumn::Status.index()),
                         );
                         style::status_badge(ui, &distribution.status);
@@ -1885,9 +2043,20 @@ mod tests {
         );
         assert_eq!(FundHoldingColumn::Weight.key(), "weight");
         assert_eq!(FundHoldingColumn::DESCRIPTORS[0].key, "company");
-        assert_eq!(FundDistributionColumn::ALL.len(), 5);
+        assert_eq!(FundDistributionColumn::ALL.len(), 6);
+        assert_eq!(
+            FundDistributionColumn::ALL.len(),
+            FundDistributionColumn::DESCRIPTORS.len()
+        );
         assert_eq!(FundDistributionColumn::Amount.index(), 2);
-        assert_eq!(FundDocumentColumn::ALL.len(), 5);
+        assert_eq!(FundDistributionColumn::Currency.key(), "currency");
+        assert_eq!(FundDocumentColumn::ALL.len(), 7);
+        assert_eq!(
+            FundDocumentColumn::ALL.len(),
+            FundDocumentColumn::DESCRIPTORS.len()
+        );
         assert_eq!(FundDocumentColumn::Change.key(), "change");
+        assert_eq!(FundDocumentColumn::Source.key(), "source");
+        assert!(!FundDocumentColumn::DESCRIPTORS[6].default_visible);
     }
 }

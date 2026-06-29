@@ -19,6 +19,25 @@ cargo clippy
 cargo test
 ```
 
+## Optional egui Inspection / MCP
+
+Inspection is development-only and disabled by default. A normal `cargo run` does not start the inspection server or require an MCP client.
+
+Install `egui-mcp` only if it is missing:
+
+```bash
+cargo install --git https://github.com/rerun-io/kittest_inspector egui_mcp
+```
+
+The currently installed executable is `/Users/ludwigjonsson/.cargo/bin/egui-mcp`. Start Mimer with eframe inspection enabled using:
+
+```bash
+cd mimer-gui
+EGUI_INSPECTION=1 cargo run --features inspection
+```
+
+Configure the coding agent or other MCP client with server name `egui` and command `/Users/ludwigjonsson/.cargo/bin/egui-mcp`. The app uses the protocol's default inspection port, expected to be `5719`. Future GUI work should use this connection for visual verification when the native display and MCP client are available.
+
 ## Local Storage
 
 Mimer now creates a per-OS app data root and a versioned storage folder:
@@ -101,7 +120,8 @@ Version migration is explicit. Future versions use sibling folders such as `v0.1
 - Portfolio, ETFs, Documents, Jobs, Holdings, Alerts, Dividends, and chart rows expose right-click/context-menu actions where they are useful.
 - Portfolio, Holdings, Documents, Jobs, and Alerts have compact case-insensitive filters local to each page.
 - Double-clicking portfolio/fund/holding source rows opens through the navigation stack where applicable; double-clicking a document row opens an in-app Document Viewer.
-- The Document Viewer shows mock metadata, source/status, a stable mock URI, content-hash/change metadata, extracted fields, change summary, and a placeholder preview for future PDF rendering.
+- Documents uses a resizable table/metadata-preview split on wide windows and stacks the preview below the table on narrow windows. Table focus drives the preview in follow mode; a pinned document inspector context keeps the preview fixed. The reusable preview exposes title/type, subject, issuer/provider, source, status/freshness, publication and checked dates, mock URL/path, raw fund id, change metadata, and open/copy/pin actions without attempting in-app PDF rendering.
+- The Document Viewer shows the same reusable metadata, source/status, stable mock URI, content-hash/change metadata, extracted fields, change summary, and a placeholder preview for future PDF rendering.
 - The context strip exposes Back, Forward, Home, and compact breadcrumbs such as `Main Portfolio > VUSA`.
 - `AnalysisSubject` is the lightweight subject model for things that can be opened, inspected, held, plotted, compared, or drilled into. It currently covers workspace portfolios, funds, fund listings, holdings, cash, and synthetic models without erasing their domain differences.
 - The Hierarchy page renders an investable tree with workspace portfolios, mock sub-portfolios, ETF listings, and look-through holdings.
@@ -111,7 +131,7 @@ Version migration is explicit. Future versions use sibling folders such as `v0.1
 - Alert read/dismiss/resolve controls and related job actions remain local mock UI state.
 - Important row values support context-menu copy actions. Portfolio, ETF/Fund, Document, Jobs, and Chart flows use `COPIED: ...` feedback when data is copied to the clipboard.
 - Clickable rows and editable cells use cursor affordances where they clarify behavior; editable portfolio cells expose edit/override tooltips.
-- Managed workstation tables persist stable column widths and visibility in UI preferences. Their compact Columns menu can hide/show low-priority fields, widen or narrow the focused column, show all, reset defaults, and copy only visible row values. `View -> Show All Table Columns` and `View -> Reset Table Columns` apply globally.
+- Managed workstation tables persist stable column widths and visibility in UI preferences. Coverage includes Portfolio, ETFs, Exposure, Alerts, Documents, Jobs scheduled/runs, Charts series data, Fund Detail listings/holdings/distributions/documents, and descriptor-backed Data Operations tables. Their compact Columns menu can hide/show low-priority fields, widen or narrow the focused column, show all, reset defaults, and copy only visible row values. `View -> Show All Table Columns` and `View -> Reset Table Columns` apply globally.
 - Column order follows stable descriptors and is stored for forward compatibility, but drag reordering and native drag-resize persistence are deferred.
 
 ## Charts And Plot Requests
@@ -171,11 +191,13 @@ The GUI should feel like a compact personal financial analysis terminal: dense, 
 
 Top-row layout is intentionally sparse: navigation and command/search live in the command row; active/selected context lives in the context strip and inspector; operational status belongs in the status bar. Shell sizing uses `src/ui/metrics.rs` for common spacing, row heights, panel widths, and breakpoints rather than scattering new magic numbers.
 
-The current fidelity pass adds shared workstation frames, a command-row workspace selector, grouped rail navigation with operational counts, reusable page headers, full-row selection on priority tables, a distinct focused chart cell, scrollable follow/pin inspector hierarchy, and consistent loading/empty/API-error panels. See [docs/ui/figma_fidelity_audit.md](docs/ui/figma_fidelity_audit.md) for the implementation matrix and deferred prototype differences.
+The current fidelity pass adds shared workstation frames, a command-row workspace selector, grouped rail navigation with operational counts, reusable page headers, managed descriptors for the remaining priority tables, a reusable document metadata preview, a resizable Documents split, scrollable follow/pin inspector hierarchy, and consistent loading/empty/API-error panels. See [docs/ui/figma_fidelity_audit.md](docs/ui/figma_fidelity_audit.md) for the implementation matrix and deferred prototype differences.
 
 The inspector is resizable, collapsible, and persisted. Its width is clamped against the available shell width; `Window` provides Show Inspector, Hide Inspector, and Reset Layout. Hiding the panel does not discard a pinned inspector context, and the context/status strips expose hidden/pinned state.
 
-Priority workstation tables distinguish selected row, focused row, focused cell, and active subject. Arrow keys move focus, Enter opens natural row targets, Escape clears table focus, and copy resolves in this order: focused cell, focused row, selected row, then page/active summary. Coverage includes Portfolio, ETFs, Exposure, Fund Detail listings/holdings/distributions/documents, Jobs, Alerts, Documents, and Data Operations plan/scheduler/budget/log/constituent/diagnostic/API-section tables. Persistent column layouts cover Portfolio, ETFs, Exposure, Alerts, Documents, Fund Detail listings/holdings, and the descriptor-backed Data Operations tables.
+Priority workstation tables distinguish selected row, focused row, focused cell, and active subject. Arrow keys move focus through visible columns only, Enter opens natural row targets, Escape clears table focus, and copy resolves in this order: focused cell, focused row, selected row, then page/active summary. Persistent column layouts now cover Portfolio, ETFs, Exposure, Alerts, Documents, Jobs, Charts/Compare/Spreads series data, Fund Detail listings/holdings/distributions/documents, and descriptor-backed Data Operations tables.
+
+Maintainability rule: reuse `src/ui/table_layout.rs` for descriptor-backed tables and `src/ui/documents.rs` for document metadata/preview UI. When adding another major section to a page already above roughly 1,000 lines, prefer a focused module extraction over growing a catch-all page file.
 
 ## Architecture
 

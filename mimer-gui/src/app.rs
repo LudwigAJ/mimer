@@ -1722,6 +1722,7 @@ impl MimerApp {
                         &snapshot.job_runs,
                         &mut self.mock_job_message,
                         &mut self.jobs,
+                        &mut self.table_layouts,
                     ) {
                         feedback = self.mock_job_message.clone();
                     }
@@ -1752,9 +1753,12 @@ impl MimerApp {
                     }
                 }
                 Page::Charts | Page::Compare | Page::Spreads => {
-                    if let Some(action) =
-                        charts_page::handle_keyboard(ctx, &mut self.charts, &snapshot.time_series)
-                    {
+                    if let Some(action) = charts_page::handle_keyboard(
+                        ctx,
+                        &mut self.charts,
+                        &snapshot.time_series,
+                        &mut self.table_layouts,
+                    ) {
                         pending_app_action = Some(map_chart_action(snapshot, action));
                     }
                 }
@@ -4605,6 +4609,10 @@ impl MimerApp {
     fn central_content(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
         let storage_summary = self.storage_summary();
+        let pinned_document_index = match self.inspector.pinned_context.as_ref() {
+            Some(InspectorContext::DocumentSnapshot { row_index, .. }) => Some(*row_index),
+            _ => None,
+        };
         match &mut self.snapshot {
             LoadState::Idle => {
                 style::state_message(ui, "EMPTY", "No workspace snapshot has been loaded.");
@@ -4650,6 +4658,7 @@ impl MimerApp {
                     storage_summary.as_ref(),
                     &self.api_runtime,
                     self.refresh_receiver.is_some() || self.api_test_receiver.is_some(),
+                    pinned_document_index,
                 );
             }
         }
@@ -4935,6 +4944,7 @@ impl MimerApp {
         storage_summary: Option<&StorageSummary>,
         api_runtime: &ApiRuntimeStatus,
         api_busy: bool,
+        pinned_document_index: Option<usize>,
     ) -> Option<AppAction> {
         match *page {
             Page::Portfolio => {
@@ -5031,7 +5041,8 @@ impl MimerApp {
                 }
             }
             Page::Charts => {
-                if let Some(action) = charts_page::render(ui, charts_state, snapshot) {
+                if let Some(action) = charts_page::render(ui, charts_state, snapshot, table_layouts)
+                {
                     return Some(map_chart_action(snapshot, action));
                 }
             }
@@ -5112,6 +5123,7 @@ impl MimerApp {
                     &mut snapshot.selected,
                     documents_state,
                     table_layouts,
+                    pinned_document_index,
                 ) {
                     return map_document_action(snapshot, action);
                 }
@@ -5133,6 +5145,7 @@ impl MimerApp {
                     &snapshot.job_runs,
                     mock_job_message,
                     jobs_state,
+                    table_layouts,
                 ) {
                     return Some(match action {
                         jobs::JobsAction::Feedback(message) => AppAction::Feedback(message),
@@ -5198,13 +5211,15 @@ impl MimerApp {
             }
             Page::Compare => {
                 ensure_compare_chart_workspace(snapshot, charts_state, compare_state);
-                if let Some(action) = charts_page::render(ui, charts_state, snapshot) {
+                if let Some(action) = charts_page::render(ui, charts_state, snapshot, table_layouts)
+                {
                     return Some(map_chart_action(snapshot, action));
                 }
             }
             Page::Spreads => {
                 ensure_spread_chart_workspace(snapshot, charts_state, spreads_state);
-                if let Some(action) = charts_page::render(ui, charts_state, snapshot) {
+                if let Some(action) = charts_page::render(ui, charts_state, snapshot, table_layouts)
+                {
                     return Some(map_chart_action(snapshot, action));
                 }
             }
@@ -6075,6 +6090,7 @@ fn map_document_action(
         }
         documents::DocumentsAction::Back => Some(AppAction::Back),
         documents::DocumentsAction::ShowChanges => Some(AppAction::Navigate(Page::Diffs)),
+        documents::DocumentsAction::PinInspector => Some(AppAction::PinInspector),
         documents::DocumentsAction::Feedback(message) => Some(AppAction::Feedback(message)),
     }
 }
@@ -6920,25 +6936,25 @@ impl eframe::App for MimerApp {
         egui::Panel::top("mimer_menu_bar")
             .exact_size(metrics::MENU_BAR_HEIGHT)
             .frame(style::shell_bar_frame(ui.style()))
-            .show_inside(ui, |ui| self.top_menu_bar(ui));
+            .show(ui, |ui| self.top_menu_bar(ui));
 
         egui::Panel::top("mimer_top_toolbar")
             .exact_size(metrics::TOOLBAR_HEIGHT)
             .frame(style::shell_bar_frame(ui.style()))
-            .show_inside(ui, |ui| self.top_toolbar(ui));
+            .show(ui, |ui| self.top_toolbar(ui));
 
         if self.layout.show_context_strip {
             egui::Panel::top("mimer_context_strip")
                 .exact_size(metrics::CONTEXT_STRIP_HEIGHT)
                 .frame(style::context_strip_frame(ui.style()))
-                .show_inside(ui, |ui| self.context_strip(ui));
+                .show(ui, |ui| self.context_strip(ui));
         }
 
         if self.layout.show_status_bar {
             egui::Panel::bottom("mimer_status_bar")
                 .exact_size(metrics::STATUS_BAR_HEIGHT)
                 .frame(style::status_bar_frame(ui.style()))
-                .show_inside(ui, |ui| self.status_bar(ui));
+                .show(ui, |ui| self.status_bar(ui));
         }
 
         let layout_width = ui.max_rect().width();
@@ -6953,7 +6969,7 @@ impl eframe::App for MimerApp {
             .resizable(true)
             .show_separator_line(true)
             .frame(style::side_panel_frame(ui.style()))
-            .show_inside(ui, |ui| self.left_navigation(ui));
+            .show(ui, |ui| self.left_navigation(ui));
         }
 
         if self.layout.show_inspector {
@@ -6969,14 +6985,14 @@ impl eframe::App for MimerApp {
             .resizable(true)
             .show_separator_line(true)
             .frame(style::side_panel_frame(ui.style()))
-            .show_inside(ui, |ui| self.right_inspector(ui));
+            .show(ui, |ui| self.right_inspector(ui));
             self.layout
                 .record_inspector_width(response.response.rect.width(), layout_width);
         }
 
         egui::CentralPanel::default()
             .frame(style::content_frame(ui.style()))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 self.central_content(ui);
             });
 

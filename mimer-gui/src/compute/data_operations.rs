@@ -194,6 +194,28 @@ fn bool_text(value: bool) -> String {
 }
 
 #[cfg(test)]
+fn constituent_row() -> ConstituentReadinessRow {
+    ConstituentReadinessRow {
+        fund_ticker: "VUSA".to_owned(),
+        holding_name: "Microsoft".to_owned(),
+        holding_ticker: "MSFT".to_owned(),
+        weight_pct: 5.9,
+        subject: crate::domain::AnalysisSubject::Holding {
+            ticker: "MSFT".to_owned(),
+            source: "VUSA".to_owned(),
+        },
+        identity_status: DataOperationStatus::Ready,
+        instrument_id: Some("instrument-msft".to_owned()),
+        listing_id: Some("listing-msft-us".to_owned()),
+        latest_price: Some(410.0),
+        price_date: Some("2026-06-20".to_owned()),
+        price_source: "yfinance".to_owned(),
+        price_status: DataOperationStatus::Fresh,
+        next_action: "Ready for exposure".to_owned(),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::AlertSeverity;
@@ -327,27 +349,5 @@ mod tests {
                 .iter()
                 .any(|action| action.label == "Open source budget")
         );
-    }
-}
-
-#[cfg(test)]
-fn constituent_row() -> ConstituentReadinessRow {
-    ConstituentReadinessRow {
-        fund_ticker: "VUSA".to_owned(),
-        holding_name: "Microsoft".to_owned(),
-        holding_ticker: "MSFT".to_owned(),
-        weight_pct: 5.9,
-        subject: crate::domain::AnalysisSubject::Holding {
-            ticker: "MSFT".to_owned(),
-            source: "VUSA".to_owned(),
-        },
-        identity_status: DataOperationStatus::Ready,
-        instrument_id: Some("instrument-msft".to_owned()),
-        listing_id: Some("listing-msft-us".to_owned()),
-        latest_price: Some(410.0),
-        price_date: Some("2026-06-20".to_owned()),
-        price_source: "yfinance".to_owned(),
-        price_status: DataOperationStatus::Fresh,
-        next_action: "Ready for exposure".to_owned(),
     }
 }

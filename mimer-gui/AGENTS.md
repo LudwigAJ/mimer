@@ -63,7 +63,30 @@ This is a Rust `egui`/`eframe` GUI project. Keep the interface dense, practical,
 - Time series provided by services should include subject, kind, unit, source, status, and point-level provenance.
 - Zoom changes must visibly apply to the egui `Context`, be clamped to a reasonable range, and stay reachable through menu, shortcut, command, and settings controls.
 
+## Descriptor-backed tables
+
+- Keep stable table IDs, column keys, descriptor order, focus indices, rendered column order, and copy payload keys aligned.
+- Reuse `src/ui/table_layout.rs` for descriptor-backed table controls and `src/ui/documents.rs` for document metadata/preview UI.
+- When table columns are hidden, keyboard navigation must traverse visible descriptors and copy-visible-row must omit hidden values.
+- Prefer a focused page submodule or reusable UI component when adding a major section to a page already above roughly 1,000 lines. Do not grow page files into catch-all command, state, preview, and rendering containers.
+- Keep source, status, freshness, and provenance naming aligned with service schemas, but do not invent GUI fields when the current `DashboardSnapshot` contract does not expose them.
+- Do not add full PDF rendering or backend behavior to solve a metadata-preview task.
+
 ## Verification
+
+For visual verification, inspection is optional and development-only. Normal app startup must remain independent of inspection and MCP. When a native display and the `egui` MCP server are available, launch the inspectable build from `mimer-gui/` with:
+
+```bash
+EGUI_INSPECTION=1 cargo run --features inspection
+```
+
+The expected MCP configuration uses server name `egui` and command `/Users/ludwigjonsson/.cargo/bin/egui-mcp`; eframe listens on the default inspection port, expected to be `5719`. Install the executable only if it is missing:
+
+```bash
+cargo install --git https://github.com/rerun-io/kittest_inspector egui_mcp
+```
+
+Use inspection to verify the shell and affected workflows where possible, but keep compile/tests independent of it and report honestly when GUI launch or MCP connectivity is unavailable.
 
 Run these before handing off changes:
 

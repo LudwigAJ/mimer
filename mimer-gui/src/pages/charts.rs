@@ -12,11 +12,12 @@ use crate::pages::{format_number, format_source, header_cell};
 use crate::source::{
     DataKind, SourceSelection, mock_available_sources_for, resolve_source_selection,
 };
-use crate::table_state::SortSpec;
+use crate::table_state::{SortSpec, TableId, TableLayoutRegistry};
 use crate::timeseries::{TimeSeries, TimeSeriesKind, TimeSeriesPoint};
 use crate::ui::grid_helpers::{KvRow, kv_grid};
 use crate::ui::metrics;
 use crate::ui::style;
+use crate::ui::table_layout::{managed_column, managed_table_revision, table_layout_controls};
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use egui_plot::{
@@ -64,6 +65,7 @@ pub fn render(
     ui: &mut egui::Ui,
     state: &mut ChartPanelState,
     snapshot: &DashboardSnapshot,
+    layouts: &mut TableLayoutRegistry,
 ) -> Option<ChartPageAction> {
     ensure_default_plot(state, snapshot);
     let mut action = None;
@@ -95,7 +97,7 @@ pub fn render(
                 return;
             };
 
-            plot_workspace(ui, state, &request, snapshot, &mut action);
+            plot_workspace(ui, state, &request, snapshot, layouts, &mut action);
         });
 
     action
@@ -105,6 +107,7 @@ pub fn handle_keyboard(
     ctx: &egui::Context,
     state: &mut ChartPanelState,
     all_series: &[TimeSeries],
+    layouts: &mut TableLayoutRegistry,
 ) -> Option<ChartPageAction> {
     if ctx.text_edit_focused() {
         return None;
@@ -183,12 +186,26 @@ pub fn handle_keyboard(
         select_chart_cell(state, row_index, row_data, column);
     }
 
+    let visible_columns =
+        layouts.visible_indices(TableId::ChartSeriesData, &ChartDataColumn::DESCRIPTORS);
     let mut moved_column = None;
     if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)) {
-        moved_column = state.table_focus.move_column(-1);
+        state
+            .data_table
+            .move_focus_visible_column(&visible_columns, -1);
+        moved_column = state
+            .data_table
+            .focused_column_index
+            .and_then(|index| ChartDataColumn::ALL.get(index).copied());
     }
     if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)) {
-        moved_column = state.table_focus.move_column(1);
+        state
+            .data_table
+            .move_focus_visible_column(&visible_columns, 1);
+        moved_column = state
+            .data_table
+            .focused_column_index
+            .and_then(|index| ChartDataColumn::ALL.get(index).copied());
     }
     if let Some(column) = moved_column {
         let row_index = state
@@ -900,6 +917,7 @@ fn plot_workspace(
     state: &mut ChartPanelState,
     request: &PlotRequest,
     snapshot: &DashboardSnapshot,
+    layouts: &mut TableLayoutRegistry,
     action: &mut Option<ChartPageAction>,
 ) {
     let available = ui.available_size_before_wrap();
@@ -946,11 +964,11 @@ fn plot_workspace(
         } else {
             series_table(
                 ui,
-                "charts_series_table",
                 &series_set.series,
                 display,
                 table_height,
                 state,
+                layouts,
                 action,
             );
         }
@@ -2057,6 +2075,13 @@ impl ChartDataRow {
         .join("\t")
     }
 
+    fn cells(&self) -> Vec<(&'static str, String)> {
+        ChartDataColumn::ALL
+            .iter()
+            .map(|column| (column.as_str(), self.cell_payload(*column).1))
+            .collect()
+    }
+
     fn cell_payload(&self, column: ChartDataColumn) -> (String, String) {
         match column {
             ChartDataColumn::Date => (self.date.clone(), self.date.clone()),
@@ -2207,11 +2232,11 @@ fn chart_cell(
 
 fn series_table(
     ui: &mut egui::Ui,
-    id: &str,
     series: &[ChartSeriesSpec],
     display: ChartDisplayContext<'_>,
     max_height: f32,
     state: &mut ChartPanelState,
+    layouts: &mut TableLayoutRegistry,
     action: &mut Option<ChartPageAction>,
 ) {
     ui.label(egui::RichText::new("Series data").strong());
@@ -2230,21 +2255,56 @@ fn series_table(
         );
         return;
     }
-    TableBuilder::new(ui)
-        .id_salt(id)
+    let visible_row = state
+        .table_focus
+        .row_index
+        .or(state.data_table.selected_index())
+        .and_then(|index| rows.get(index))
+        .map(|row| {
+            (
+                row.series.as_str(),
+                layouts.visible_row_text(
+                    TableId::ChartSeriesData,
+                    &ChartDataColumn::DESCRIPTORS,
+                    &row.cells(),
+                ),
+            )
+        });
+    if table_layout_controls(
+        ui,
+        layouts,
+        TableId::ChartSeriesData,
+        &ChartDataColumn::DESCRIPTORS,
+        state
+            .data_table
+            .focused_column_index
+            .and_then(|index| ChartDataColumn::ALL.get(index))
+            .map(|column| column.as_str()),
+        visible_row,
+    ) {
+        state.data_table.clear_focus();
+        state.table_focus.clear();
+    }
+    let revision = managed_table_revision(
+        layouts,
+        TableId::ChartSeriesData,
+        &ChartDataColumn::DESCRIPTORS,
+    );
+    let mut table = TableBuilder::new(ui)
+        .id_salt(("charts_series_table", revision))
         .striped(true)
-        .resizable(true)
+        .resizable(false)
         .auto_shrink(false)
-        .max_scroll_height(max_height.max(150.0))
-        .column(Column::initial(96.0).at_least(78.0))
-        .column(Column::initial(160.0).at_least(110.0).clip(true))
-        .column(Column::initial(100.0).at_least(78.0).clip(true))
-        .column(Column::initial(102.0).at_least(82.0))
-        .column(Column::initial(102.0).at_least(82.0))
-        .column(Column::initial(68.0).at_least(54.0))
-        .column(Column::initial(100.0).at_least(76.0))
-        .column(Column::initial(92.0).at_least(70.0))
-        .column(Column::remainder().at_least(88.0))
+        .max_scroll_height(max_height.max(150.0));
+    for descriptor in ChartDataColumn::DESCRIPTORS {
+        table = table.column(managed_column(
+            layouts,
+            TableId::ChartSeriesData,
+            &ChartDataColumn::DESCRIPTORS,
+            descriptor,
+        ));
+    }
+    table
         .header(metrics::TABLE_HEADER_HEIGHT, |mut header| {
             header.col(|ui| {
                 crate::pages::sortable_header_cell(ui, &mut state.data_table, COL_DATE, "Date")

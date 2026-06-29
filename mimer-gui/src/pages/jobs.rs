@@ -1,10 +1,11 @@
 use crate::domain::{JobRun, JobStatus, ScheduledJob};
 use crate::filter::any_contains_ci;
 use crate::pages::{bool_text, format_number, header_cell, sortable_header_cell};
-use crate::table_state::{SortSpec, TableId, TableState};
+use crate::table_state::{ColumnDescriptor, SortSpec, TableId, TableLayoutRegistry, TableState};
+use crate::ui::table_layout::{managed_column, managed_table_revision, table_layout_controls};
 use crate::ui::{metrics, style};
 use eframe::egui;
-use egui_extras::{Column, TableBuilder};
+use egui_extras::TableBuilder;
 use std::cmp::Ordering;
 
 const COL_NAME: &str = "name";
@@ -40,6 +41,21 @@ impl ScheduledJobColumn {
         Self::Active,
         Self::LastRun,
         Self::NextRun,
+    ];
+
+    const DESCRIPTORS: [ColumnDescriptor; 8] = [
+        ColumnDescriptor::new(COL_NAME, "Name", 210.0, 150.0, 420.0)
+            .required()
+            .clipped(),
+        ColumnDescriptor::new(COL_TYPE, "Type", 92.0, 72.0, 180.0),
+        ColumnDescriptor::new(COL_SOURCE, "Source", 150.0, 110.0, 280.0)
+            .required()
+            .clipped(),
+        ColumnDescriptor::new("cron", "Cron", 120.0, 96.0, 240.0),
+        ColumnDescriptor::new(COL_ACTIVE, "Active", 68.0, 56.0, 110.0),
+        ColumnDescriptor::new(COL_LAST_RUN, "Last run", 128.0, 108.0, 240.0),
+        ColumnDescriptor::new(COL_NEXT_RUN, "Next run", 132.0, 108.0, 240.0),
+        ColumnDescriptor::new("actions", "Actions", 150.0, 128.0, 280.0).required(),
     ];
 
     fn index(self) -> usize {
@@ -98,10 +114,11 @@ enum JobRunColumn {
     Updated,
     Failed,
     Message,
+    RunId,
 }
 
 impl JobRunColumn {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::JobType,
         Self::Source,
         Self::Status,
@@ -111,6 +128,25 @@ impl JobRunColumn {
         Self::Updated,
         Self::Failed,
         Self::Message,
+        Self::RunId,
+    ];
+
+    const DESCRIPTORS: [ColumnDescriptor; 11] = [
+        ColumnDescriptor::new(COL_TYPE, "Type", 96.0, 76.0, 180.0).required(),
+        ColumnDescriptor::new(COL_SOURCE, "Source", 150.0, 110.0, 280.0)
+            .required()
+            .clipped(),
+        ColumnDescriptor::new(COL_STATUS, "Status", 92.0, 72.0, 160.0).required(),
+        ColumnDescriptor::new(COL_STARTED, "Started", 128.0, 104.0, 240.0),
+        ColumnDescriptor::new(COL_FINISHED, "Finished", 128.0, 104.0, 240.0),
+        ColumnDescriptor::new(COL_INSERTED, "Inserted", 78.0, 60.0, 140.0),
+        ColumnDescriptor::new(COL_UPDATED, "Updated", 78.0, 60.0, 140.0),
+        ColumnDescriptor::new(COL_FAILED, "Failed", 70.0, 56.0, 120.0),
+        ColumnDescriptor::new("message", "Message", 220.0, 160.0, 520.0).clipped(),
+        ColumnDescriptor::new("run_id", "Run ID", 180.0, 130.0, 360.0)
+            .hidden_by_default()
+            .clipped(),
+        ColumnDescriptor::new("actions", "Actions", 150.0, 128.0, 280.0).required(),
     ];
 
     fn index(self) -> usize {
@@ -131,6 +167,7 @@ impl JobRunColumn {
             Self::Updated => COL_UPDATED,
             Self::Failed => COL_FAILED,
             Self::Message => "message",
+            Self::RunId => "run_id",
         }
     }
 
@@ -145,6 +182,7 @@ impl JobRunColumn {
             Self::Updated => "Updated",
             Self::Failed => "Failed",
             Self::Message => "Message",
+            Self::RunId => "Run ID",
         }
     }
 
@@ -159,6 +197,7 @@ impl JobRunColumn {
             Self::Updated => run.updated.to_string(),
             Self::Failed => run.failed.to_string(),
             Self::Message => run.message.clone(),
+            Self::RunId => run.id.clone(),
         };
         (value.clone(), value)
     }
@@ -194,6 +233,7 @@ pub fn render(
     job_runs: &[JobRun],
     mock_job_message: &mut Option<String>,
     state: &mut JobsState,
+    layouts: &mut TableLayoutRegistry,
 ) -> Option<JobsAction> {
     let mut action = None;
     egui::ScrollArea::vertical()
@@ -234,9 +274,16 @@ pub fn render(
             ui.add_space(6.0);
             filters(ui, state);
             ui.add_space(4.0);
-            scheduled_jobs_table(ui, scheduled_jobs, mock_job_message, state, &mut action);
+            scheduled_jobs_table(
+                ui,
+                scheduled_jobs,
+                mock_job_message,
+                state,
+                layouts,
+                &mut action,
+            );
             ui.add_space(8.0);
-            job_runs_table(ui, job_runs, mock_job_message, state, &mut action);
+            job_runs_table(ui, job_runs, mock_job_message, state, layouts, &mut action);
         });
     action
 }
@@ -247,14 +294,17 @@ pub fn handle_keyboard(
     job_runs: &[JobRun],
     mock_job_message: &mut Option<String>,
     state: &mut JobsState,
+    layouts: &mut TableLayoutRegistry,
 ) -> bool {
     if ctx.text_edit_focused() {
         return false;
     }
 
     match state.active_table {
-        TableId::JobRuns => handle_job_run_keyboard(ctx, job_runs, mock_job_message, state),
-        _ => handle_scheduled_job_keyboard(ctx, scheduled_jobs, mock_job_message, state),
+        TableId::JobRuns => {
+            handle_job_run_keyboard(ctx, job_runs, mock_job_message, state, layouts)
+        }
+        _ => handle_scheduled_job_keyboard(ctx, scheduled_jobs, mock_job_message, state, layouts),
     }
 }
 
@@ -263,6 +313,7 @@ fn handle_scheduled_job_keyboard(
     scheduled_jobs: &[ScheduledJob],
     mock_job_message: &mut Option<String>,
     state: &mut JobsState,
+    layouts: &mut TableLayoutRegistry,
 ) -> bool {
     let visible_indices = visible_scheduled_job_indices(scheduled_jobs, state);
     let mut moved = false;
@@ -279,15 +330,23 @@ fn handle_scheduled_job_keyboard(
         moved = true;
     }
     if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)) {
+        let columns = layouts
+            .visible_indices(TableId::ScheduledJobs, &ScheduledJobColumn::DESCRIPTORS)
+            .into_iter()
+            .filter(|index| *index < ScheduledJobColumn::ALL.len())
+            .collect::<Vec<_>>();
         state
             .scheduled_table
-            .move_focus_column(ScheduledJobColumn::ALL.len(), -1);
+            .move_focus_visible_column(&columns, -1);
         moved = true;
     }
     if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)) {
-        state
-            .scheduled_table
-            .move_focus_column(ScheduledJobColumn::ALL.len(), 1);
+        let columns = layouts
+            .visible_indices(TableId::ScheduledJobs, &ScheduledJobColumn::DESCRIPTORS)
+            .into_iter()
+            .filter(|index| *index < ScheduledJobColumn::ALL.len())
+            .collect::<Vec<_>>();
+        state.scheduled_table.move_focus_visible_column(&columns, 1);
         moved = true;
     }
     if moved {
@@ -324,6 +383,7 @@ fn handle_job_run_keyboard(
     job_runs: &[JobRun],
     mock_job_message: &mut Option<String>,
     state: &mut JobsState,
+    layouts: &mut TableLayoutRegistry,
 ) -> bool {
     let visible_indices = visible_job_run_indices(job_runs, state);
     let mut moved = false;
@@ -340,15 +400,21 @@ fn handle_job_run_keyboard(
         moved = true;
     }
     if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)) {
-        state
-            .runs_table
-            .move_focus_column(JobRunColumn::ALL.len(), -1);
+        let columns = layouts
+            .visible_indices(TableId::JobRuns, &JobRunColumn::DESCRIPTORS)
+            .into_iter()
+            .filter(|index| *index < JobRunColumn::ALL.len())
+            .collect::<Vec<_>>();
+        state.runs_table.move_focus_visible_column(&columns, -1);
         moved = true;
     }
     if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)) {
-        state
-            .runs_table
-            .move_focus_column(JobRunColumn::ALL.len(), 1);
+        let columns = layouts
+            .visible_indices(TableId::JobRuns, &JobRunColumn::DESCRIPTORS)
+            .into_iter()
+            .filter(|index| *index < JobRunColumn::ALL.len())
+            .collect::<Vec<_>>();
+        state.runs_table.move_focus_visible_column(&columns, 1);
         moved = true;
     }
     if moved {
@@ -403,6 +469,7 @@ fn scheduled_jobs_table(
     scheduled_jobs: &[ScheduledJob],
     mock_job_message: &mut Option<String>,
     state: &mut JobsState,
+    layouts: &mut TableLayoutRegistry,
     action: &mut Option<JobsAction>,
 ) {
     let filtered_jobs = visible_scheduled_job_indices(scheduled_jobs, state);
@@ -415,23 +482,58 @@ fn scheduled_jobs_table(
         ))
         .strong(),
     );
+    let visible_row = state
+        .scheduled_table
+        .focused_row_index
+        .or(state.scheduled_table.selected_index())
+        .and_then(|index| scheduled_jobs.get(index))
+        .map(|job| {
+            (
+                job.name.as_str(),
+                layouts.visible_row_text(
+                    TableId::ScheduledJobs,
+                    &ScheduledJobColumn::DESCRIPTORS,
+                    &scheduled_job_cells(job),
+                ),
+            )
+        });
+    if table_layout_controls(
+        ui,
+        layouts,
+        TableId::ScheduledJobs,
+        &ScheduledJobColumn::DESCRIPTORS,
+        state
+            .scheduled_table
+            .focused_column_index
+            .and_then(|index| ScheduledJobColumn::ALL.get(index))
+            .map(|column| column.key()),
+        visible_row,
+    ) {
+        state.scheduled_table.clear_focus();
+    }
     if filtered_jobs.is_empty() {
         style::state_message(ui, "EMPTY", "No scheduled jobs match the current filter.");
         return;
     }
-    TableBuilder::new(ui)
-        .id_salt("scheduled_jobs_table")
+    let revision = managed_table_revision(
+        layouts,
+        TableId::ScheduledJobs,
+        &ScheduledJobColumn::DESCRIPTORS,
+    );
+    let mut table = TableBuilder::new(ui)
+        .id_salt(("scheduled_jobs_table", revision))
         .striped(true)
-        .resizable(true)
-        .max_scroll_height(210.0)
-        .column(Column::initial(210.0).at_least(150.0).clip(true))
-        .column(Column::initial(92.0).at_least(72.0))
-        .column(Column::initial(150.0).at_least(110.0).clip(true))
-        .column(Column::initial(120.0).at_least(96.0))
-        .column(Column::initial(68.0).at_least(56.0))
-        .column(Column::initial(128.0).at_least(108.0))
-        .column(Column::initial(132.0).at_least(108.0))
-        .column(Column::remainder().at_least(128.0))
+        .resizable(false)
+        .max_scroll_height(210.0);
+    for descriptor in ScheduledJobColumn::DESCRIPTORS {
+        table = table.column(managed_column(
+            layouts,
+            TableId::ScheduledJobs,
+            &ScheduledJobColumn::DESCRIPTORS,
+            descriptor,
+        ));
+    }
+    table
         .header(metrics::TABLE_HEADER_HEIGHT, |mut header| {
             header.col(|ui| {
                 sortable_header_cell(
@@ -635,6 +737,7 @@ fn job_runs_table(
     job_runs: &[JobRun],
     mock_job_message: &mut Option<String>,
     state: &mut JobsState,
+    layouts: &mut TableLayoutRegistry,
     action: &mut Option<JobsAction>,
 ) {
     let filtered_runs = visible_job_run_indices(job_runs, state);
@@ -647,25 +750,54 @@ fn job_runs_table(
         ))
         .strong(),
     );
+    let visible_row = state
+        .runs_table
+        .focused_row_index
+        .or(state.runs_table.selected_index())
+        .and_then(|index| job_runs.get(index))
+        .map(|run| {
+            (
+                run.id.as_str(),
+                layouts.visible_row_text(
+                    TableId::JobRuns,
+                    &JobRunColumn::DESCRIPTORS,
+                    &job_run_cells(run),
+                ),
+            )
+        });
+    if table_layout_controls(
+        ui,
+        layouts,
+        TableId::JobRuns,
+        &JobRunColumn::DESCRIPTORS,
+        state
+            .runs_table
+            .focused_column_index
+            .and_then(|index| JobRunColumn::ALL.get(index))
+            .map(|column| column.key()),
+        visible_row,
+    ) {
+        state.runs_table.clear_focus();
+    }
     if filtered_runs.is_empty() {
         style::state_message(ui, "EMPTY", "No job runs match the current filter.");
         return;
     }
-    TableBuilder::new(ui)
-        .id_salt("job_runs_table")
+    let revision = managed_table_revision(layouts, TableId::JobRuns, &JobRunColumn::DESCRIPTORS);
+    let mut table = TableBuilder::new(ui)
+        .id_salt(("job_runs_table", revision))
         .striped(true)
-        .resizable(true)
-        .max_scroll_height(300.0)
-        .column(Column::initial(96.0).at_least(76.0))
-        .column(Column::initial(150.0).at_least(110.0).clip(true))
-        .column(Column::initial(92.0).at_least(72.0))
-        .column(Column::initial(128.0).at_least(104.0))
-        .column(Column::initial(128.0).at_least(104.0))
-        .column(Column::initial(78.0).at_least(60.0))
-        .column(Column::initial(78.0).at_least(60.0))
-        .column(Column::initial(70.0).at_least(56.0))
-        .column(Column::initial(132.0).at_least(108.0))
-        .column(Column::remainder().at_least(180.0).clip(true))
+        .resizable(false)
+        .max_scroll_height(300.0);
+    for descriptor in JobRunColumn::DESCRIPTORS {
+        table = table.column(managed_column(
+            layouts,
+            TableId::JobRuns,
+            &JobRunColumn::DESCRIPTORS,
+            descriptor,
+        ));
+    }
+    table
         .header(metrics::TABLE_HEADER_HEIGHT, |mut header| {
             header.col(|ui| sortable_header_cell(ui, &mut state.runs_table, COL_TYPE, "Type"));
             header.col(|ui| sortable_header_cell(ui, &mut state.runs_table, COL_SOURCE, "Source"));
@@ -681,8 +813,9 @@ fn job_runs_table(
             header
                 .col(|ui| sortable_header_cell(ui, &mut state.runs_table, COL_UPDATED, "Updated"));
             header.col(|ui| sortable_header_cell(ui, &mut state.runs_table, COL_FAILED, "Failed"));
-            header.col(|ui| header_cell(ui, "Actions"));
             header.col(|ui| header_cell(ui, JobRunColumn::Message.label()));
+            header.col(|ui| header_cell(ui, JobRunColumn::RunId.label()));
+            header.col(|ui| header_cell(ui, "Actions"));
         })
         .body(|mut body| {
             for index in filtered_runs {
@@ -816,6 +949,24 @@ fn job_runs_table(
                         ui.label(format_number(f64::from(run.failed), 0));
                     });
                     row.col(|ui| {
+                        style::focused_table_cell(
+                            ui,
+                            state
+                                .runs_table
+                                .is_focused_cell(index, JobRunColumn::Message.index()),
+                        );
+                        ui.label(&run.message);
+                    });
+                    row.col(|ui| {
+                        style::focused_table_cell(
+                            ui,
+                            state
+                                .runs_table
+                                .is_focused_cell(index, JobRunColumn::RunId.index()),
+                        );
+                        ui.monospace(&run.id);
+                    });
+                    row.col(|ui| {
                         ui.horizontal_wrapped(|ui| {
                             if crate::ui::actions::action_button(
                                 ui,
@@ -854,15 +1005,6 @@ fn job_runs_table(
                                     Some(JobsAction::Feedback(format!("COPIED: run {}", run.id)));
                             }
                         });
-                    });
-                    row.col(|ui| {
-                        style::focused_table_cell(
-                            ui,
-                            state
-                                .runs_table
-                                .is_focused_cell(index, JobRunColumn::Message.index()),
-                        );
-                        ui.label(&run.message);
                     });
                 });
             }
@@ -1066,6 +1208,24 @@ fn selected_job_name(scheduled_jobs: &[ScheduledJob], state: &JobsState) -> Opti
         .map(|job| job.name.clone())
 }
 
+fn scheduled_job_cells(job: &ScheduledJob) -> Vec<(&'static str, String)> {
+    let mut cells = ScheduledJobColumn::ALL
+        .iter()
+        .map(|column| (column.key(), column.payload(job).1))
+        .collect::<Vec<_>>();
+    cells.push(("actions", "run/open/copy".to_owned()));
+    cells
+}
+
+fn job_run_cells(run: &JobRun) -> Vec<(&'static str, String)> {
+    let mut cells = JobRunColumn::ALL
+        .iter()
+        .map(|column| (column.key(), column.payload(run).1))
+        .collect::<Vec<_>>();
+    cells.push(("actions", "open/run/copy".to_owned()));
+    cells
+}
+
 fn scheduled_job_copy_text(job: &ScheduledJob) -> String {
     [
         job.name.clone(),
@@ -1159,9 +1319,33 @@ mod tests {
     #[test]
     fn job_column_descriptors_cover_copyable_fields() {
         assert_eq!(ScheduledJobColumn::ALL.len(), 7);
+        assert_eq!(ScheduledJobColumn::DESCRIPTORS.len(), 8);
         assert_eq!(ScheduledJobColumn::NextRun.key(), COL_NEXT_RUN);
-        assert_eq!(JobRunColumn::ALL.len(), 9);
+        assert_eq!(JobRunColumn::ALL.len(), 10);
+        assert_eq!(JobRunColumn::DESCRIPTORS.len(), 11);
         assert_eq!(JobRunColumn::Message.label(), "Message");
         assert_eq!(JobRunColumn::Failed.index(), 7);
+        assert_eq!(JobRunColumn::RunId.key(), "run_id");
+        assert!(!JobRunColumn::DESCRIPTORS[9].default_visible);
+    }
+
+    #[test]
+    fn hidden_job_columns_are_excluded_from_visible_copy() {
+        let run = job_run("run-1", 0);
+        let mut layouts = TableLayoutRegistry::default();
+        let text = layouts.visible_row_text(
+            TableId::JobRuns,
+            &JobRunColumn::DESCRIPTORS,
+            &job_run_cells(&run),
+        );
+
+        assert!(!text.contains("run-1"));
+        layouts.show_all(TableId::JobRuns, &JobRunColumn::DESCRIPTORS);
+        let text = layouts.visible_row_text(
+            TableId::JobRuns,
+            &JobRunColumn::DESCRIPTORS,
+            &job_run_cells(&run),
+        );
+        assert!(text.contains("run-1"));
     }
 }

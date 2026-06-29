@@ -3,9 +3,9 @@ use crate::compute::diff::{DiffStatus, mock_entity_diffs};
 use crate::domain::{DocumentSnapshot, Fund};
 use crate::filter::any_contains_ci;
 use crate::format::{fmt_date_str, fmt_status};
-use crate::pages::format_source;
 use crate::pages::{header_cell, page_heading, sortable_header_cell};
 use crate::table_state::{ColumnDescriptor, SortSpec, TableId, TableLayoutRegistry, TableState};
+use crate::ui::documents::{self as document_ui, DocumentPreviewAction};
 use crate::ui::metrics;
 use crate::ui::style;
 use crate::ui::table_layout::{managed_column, managed_table_revision, table_layout_controls};
@@ -117,6 +117,7 @@ pub enum DocumentsAction {
     },
     Back,
     ShowChanges,
+    PinInspector,
     Feedback(String),
 }
 
@@ -127,34 +128,85 @@ pub fn render(
     selected: &mut SelectedInstrument,
     state: &mut DocumentsState,
     layouts: &mut TableLayoutRegistry,
+    pinned_document_index: Option<usize>,
 ) -> Option<DocumentsAction> {
     let mut action = None;
-    egui::ScrollArea::vertical()
-        .auto_shrink(false)
-        .show(ui, |ui| {
-            let stale = documents
-                .iter()
-                .filter(|document| document.status.eq_ignore_ascii_case("stale"))
-                .count();
-            let subtitle = format!(
-                "{} snapshots · {} stale · double-click opens the in-app viewer",
-                documents.len(),
-                stale
-            );
-            style::page_header(ui, "Documents", Some("Library"), Some(&subtitle), |ui| {
-                style::mock_badge(ui);
-                if stale > 0 {
-                    style::status_badge(ui, "STALE");
+    let stale = documents
+        .iter()
+        .filter(|document| document.status.eq_ignore_ascii_case("stale"))
+        .count();
+    let subtitle = format!(
+        "{} snapshots · {} stale · table focus drives the metadata preview",
+        documents.len(),
+        stale
+    );
+    style::page_header(ui, "Documents", Some("Library"), Some(&subtitle), |ui| {
+        style::mock_badge(ui);
+        if stale > 0 {
+            style::status_badge(ui, "STALE");
+        }
+    });
+    ui.add_space(6.0);
+    filters(ui, state);
+    ui.add_space(4.0);
+
+    let preview_index = preview_document_index(
+        state.table.focused_row_index,
+        state.table.selected_index(),
+        pinned_document_index,
+        documents.len(),
+    );
+    let preview_document = preview_index.and_then(|index| documents.get(index));
+    let preview_fund =
+        preview_document.and_then(|document| funds.iter().find(|fund| fund.id == document.fund_id));
+    let preview_pinned = pinned_document_index == preview_index && preview_index.is_some();
+
+    if ui.available_width() >= 900.0 {
+        egui::Panel::right("documents_metadata_preview_split")
+            .resizable(true)
+            .default_size(360.0)
+            .min_size(280.0)
+            .max_size((ui.available_width() * 0.48).max(320.0))
+            .show(ui, |ui| {
+                if let Some(preview_action) =
+                    document_ui::render_preview(ui, preview_document, preview_fund, preview_pinned)
+                {
+                    action = map_preview_action(preview_action, preview_document);
                 }
             });
-            ui.add_space(6.0);
-            filters(ui, state);
-            ui.add_space(4.0);
-
-            action = documents_table(ui, documents, funds, selected, state, layouts);
-            ui.add_space(metrics::SPACE_2);
-            document_diff_panel(ui, documents, state);
-        });
+        egui::ScrollArea::vertical()
+            .id_salt("documents_table_workspace")
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                if let Some(table_action) =
+                    documents_table(ui, documents, funds, selected, state, layouts)
+                {
+                    action = Some(table_action);
+                }
+                ui.add_space(metrics::SPACE_2);
+                document_diff_panel(ui, documents, state);
+            });
+    } else {
+        egui::ScrollArea::vertical()
+            .id_salt("documents_narrow_workspace")
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                if let Some(table_action) =
+                    documents_table(ui, documents, funds, selected, state, layouts)
+                {
+                    action = Some(table_action);
+                }
+                ui.separator();
+                ui.label(egui::RichText::new("Document preview").strong());
+                if let Some(preview_action) =
+                    document_ui::render_preview(ui, preview_document, preview_fund, preview_pinned)
+                {
+                    action = map_preview_action(preview_action, preview_document);
+                }
+                ui.add_space(metrics::SPACE_2);
+                document_diff_panel(ui, documents, state);
+            });
+    }
     action
 }
 
@@ -255,13 +307,13 @@ pub fn render_viewer(
                     header.col(|ui| header_cell(ui, "Value"));
                 })
                 .body(|mut body| {
-                    for (field, value) in document_metadata_rows(document, fund) {
+                    for metadata in document_ui::metadata_rows(document, fund) {
                         body.row(metrics::ROW_HEIGHT_COMPACT, |mut row| {
                             row.col(|ui| {
-                                ui.label(field);
+                                ui.label(metadata.label);
                             });
                             row.col(|ui| {
-                                ui.monospace(value);
+                                ui.monospace(metadata.full_value);
                             });
                         });
                     }
@@ -837,6 +889,34 @@ fn selected_document<'a>(
         .and_then(|index| documents.get(index))
 }
 
+fn preview_document_index(
+    focused_index: Option<usize>,
+    selected_index: Option<usize>,
+    pinned_index: Option<usize>,
+    document_count: usize,
+) -> Option<usize> {
+    pinned_index
+        .filter(|index| *index < document_count)
+        .or_else(|| focused_index.filter(|index| *index < document_count))
+        .or_else(|| selected_index.filter(|index| *index < document_count))
+}
+
+fn map_preview_action(
+    action: DocumentPreviewAction,
+    document: Option<&DocumentSnapshot>,
+) -> Option<DocumentsAction> {
+    match action {
+        DocumentPreviewAction::OpenViewer => document.map(open_document_action),
+        DocumentPreviewAction::OpenRelatedFund => {
+            document.map(|document| DocumentsAction::OpenRelatedFund {
+                fund_id: document.fund_id.clone(),
+            })
+        }
+        DocumentPreviewAction::PinInspector => Some(DocumentsAction::PinInspector),
+        DocumentPreviewAction::Feedback(message) => Some(DocumentsAction::Feedback(message)),
+    }
+}
+
 fn open_document_action(document: &DocumentSnapshot) -> DocumentsAction {
     DocumentsAction::OpenDocument {
         fund_id: document.fund_id.clone(),
@@ -846,10 +926,7 @@ fn open_document_action(document: &DocumentSnapshot) -> DocumentsAction {
 }
 
 pub(crate) fn document_mock_uri(document: &DocumentSnapshot) -> String {
-    format!(
-        "mock://documents/{}/{}/{}",
-        document.ticker, document.document_type, document.latest_date
-    )
+    document_ui::document_uri(document)
 }
 
 fn document_copy_text(document: &DocumentSnapshot) -> String {
@@ -868,38 +945,7 @@ pub(crate) fn document_metadata_copy_text(
     document: &DocumentSnapshot,
     fund: Option<&Fund>,
 ) -> String {
-    document_metadata_rows(document, fund)
-        .into_iter()
-        .map(|(field, value)| format!("{field}: {value}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn document_metadata_rows(
-    document: &DocumentSnapshot,
-    fund: Option<&Fund>,
-) -> Vec<(&'static str, String)> {
-    vec![
-        ("Title/type", document.document_type.clone()),
-        ("Fund/ticker", document.ticker.clone()),
-        (
-            "Fund name",
-            fund.map(|fund| fund.name.clone())
-                .unwrap_or_else(|| document.fund_id.clone()),
-        ),
-        (
-            "Document date",
-            fmt_date_str(&document.latest_date).to_owned(),
-        ),
-        ("Source", format_source(&document.source)),
-        ("Status", fmt_status(&document.status)),
-        ("URL/path", document_mock_uri(document)),
-        ("Content hash/change", document.content_hash_change.clone()),
-        (
-            "Last checked",
-            fmt_date_str(&document.last_checked).to_owned(),
-        ),
-    ]
+    document_ui::metadata_copy_text(document, fund)
 }
 
 fn select_fund_or_listing(
@@ -972,5 +1018,36 @@ mod tests {
         assert_eq!(DocumentColumn::Source.index(), 4);
         assert!(!DOCUMENT_COLUMNS[5].default_visible);
         assert!(!DOCUMENT_COLUMNS[7].default_visible);
+    }
+
+    #[test]
+    fn pinned_preview_wins_over_focus_and_selection() {
+        assert_eq!(
+            preview_document_index(Some(2), Some(1), Some(0), 3),
+            Some(0)
+        );
+        assert_eq!(
+            preview_document_index(Some(2), Some(1), Some(9), 3),
+            Some(2)
+        );
+        assert_eq!(preview_document_index(None, Some(1), None, 3), Some(1));
+    }
+
+    #[test]
+    fn preview_open_action_targets_the_resolved_document() {
+        let document = document("VUSA", "2026-05-31", "issuer");
+
+        assert_eq!(
+            map_preview_action(DocumentPreviewAction::OpenViewer, Some(&document)),
+            Some(DocumentsAction::OpenDocument {
+                fund_id: "fund-VUSA".to_owned(),
+                ticker: "VUSA".to_owned(),
+                document_type: "factsheet".to_owned(),
+            })
+        );
+        assert_eq!(
+            map_preview_action(DocumentPreviewAction::PinInspector, Some(&document)),
+            Some(DocumentsAction::PinInspector)
+        );
     }
 }

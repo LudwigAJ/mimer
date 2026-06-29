@@ -159,8 +159,10 @@ mod tests {
 
     #[test]
     fn inspector_width_clamps_to_available_workspace() {
-        let mut layout = LayoutState::default();
-        layout.inspector_width = 700.0;
+        let layout = LayoutState {
+            inspector_width: 700.0,
+            ..LayoutState::default()
+        };
 
         assert_eq!(
             layout.clamped_inspector_width(1600.0),
@@ -190,8 +192,10 @@ mod tests {
 
     #[test]
     fn narrow_window_does_not_overwrite_preferred_inspector_width() {
-        let mut layout = LayoutState::default();
-        layout.inspector_width = 340.0;
+        let mut layout = LayoutState {
+            inspector_width: 340.0,
+            ..LayoutState::default()
+        };
 
         layout.record_inspector_width(metrics::INSPECTOR_NARROW_MIN_WIDTH, 760.0);
 

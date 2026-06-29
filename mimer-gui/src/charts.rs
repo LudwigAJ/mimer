@@ -6,7 +6,7 @@ use crate::compute::charts::{
 };
 use crate::domain::AnalysisSubject;
 use crate::source::SourceSelection;
-use crate::table_state::{TableId, TableState};
+use crate::table_state::{ColumnDescriptor, TableId, TableState};
 use crate::timeseries::{TimeSeries, TimeSeriesKind, TimeSeriesPoint, find_series};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -79,6 +79,20 @@ impl ChartDataColumn {
         Self::Kind,
     ];
 
+    pub const DESCRIPTORS: [ColumnDescriptor; 9] = [
+        ColumnDescriptor::new("date", "Date", 96.0, 78.0, 180.0).required(),
+        ColumnDescriptor::new("series", "Series", 160.0, 110.0, 340.0)
+            .required()
+            .clipped(),
+        ColumnDescriptor::new("subject", "Subject", 112.0, 82.0, 240.0).clipped(),
+        ColumnDescriptor::new("value", "Value", 102.0, 82.0, 180.0).required(),
+        ColumnDescriptor::new("raw_value", "Raw", 102.0, 82.0, 180.0).hidden_by_default(),
+        ColumnDescriptor::new("unit", "Unit", 68.0, 54.0, 120.0),
+        ColumnDescriptor::new("source", "Source", 100.0, 76.0, 220.0).required(),
+        ColumnDescriptor::new("status", "Status", 92.0, 70.0, 160.0).required(),
+        ColumnDescriptor::new("kind", "Kind", 100.0, 78.0, 180.0).hidden_by_default(),
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Date => "date",
@@ -106,22 +120,6 @@ impl ChartDataColumn {
             Self::Kind => "Kind",
         }
     }
-
-    pub fn next(self) -> Self {
-        let current = Self::ALL
-            .iter()
-            .position(|column| *column == self)
-            .unwrap_or(0);
-        Self::ALL[(current + 1).min(Self::ALL.len() - 1)]
-    }
-
-    pub fn previous(self) -> Self {
-        let current = Self::ALL
-            .iter()
-            .position(|column| *column == self)
-            .unwrap_or(0);
-        Self::ALL[current.saturating_sub(1)]
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -143,17 +141,6 @@ impl ChartTableFocus {
 
     pub fn column_or_default(&self) -> ChartDataColumn {
         self.column.unwrap_or_default()
-    }
-
-    pub fn move_column(&mut self, offset: isize) -> Option<ChartDataColumn> {
-        let current = self.column_or_default();
-        let next = match offset.cmp(&0) {
-            std::cmp::Ordering::Less => current.previous(),
-            std::cmp::Ordering::Greater => current.next(),
-            std::cmp::Ordering::Equal => current,
-        };
-        self.column = Some(next);
-        Some(next)
     }
 }
 
@@ -1489,18 +1476,31 @@ mod tests {
     }
 
     #[test]
-    fn chart_table_focus_tracks_row_and_column_movement() {
+    fn chart_table_focus_tracks_and_clears_cell() {
         let mut focus = ChartTableFocus::default();
 
         focus.set(2, ChartDataColumn::Value);
         assert_eq!(focus.row_index, Some(2));
         assert_eq!(focus.column, Some(ChartDataColumn::Value));
-        assert_eq!(focus.move_column(1), Some(ChartDataColumn::RawValue));
-        assert_eq!(focus.move_column(-1), Some(ChartDataColumn::Value));
-
         focus.clear();
         assert_eq!(focus.row_index, None);
         assert_eq!(focus.column, None);
+    }
+
+    #[test]
+    fn chart_data_descriptors_have_stable_keys_and_order() {
+        assert_eq!(
+            ChartDataColumn::ALL.len(),
+            ChartDataColumn::DESCRIPTORS.len()
+        );
+        for (column, descriptor) in ChartDataColumn::ALL
+            .iter()
+            .zip(ChartDataColumn::DESCRIPTORS)
+        {
+            assert_eq!(column.as_str(), descriptor.key);
+        }
+        assert!(!ChartDataColumn::DESCRIPTORS[4].default_visible);
+        assert!(!ChartDataColumn::DESCRIPTORS[8].default_visible);
     }
 
     #[test]

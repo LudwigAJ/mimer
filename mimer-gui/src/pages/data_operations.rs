@@ -3595,8 +3595,10 @@ mod tests {
 
     #[test]
     fn filters_and_sorts_plan_items() {
-        let mut state = DataOperationsState::default();
-        state.filter = "price".to_owned();
+        let mut state = DataOperationsState {
+            filter: "price".to_owned(),
+            ..DataOperationsState::default()
+        };
         state.plan_table.toggle_sort(COL_PRIORITY);
         state.plan_table.toggle_sort(COL_PRIORITY);
         let rows = vec![

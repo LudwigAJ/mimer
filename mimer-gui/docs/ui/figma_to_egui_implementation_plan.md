@@ -150,7 +150,7 @@
 - Data Operations shows partial/API failures as a compact operational state panel and strengthens selected readiness/table rows.
 - Settings uses the same API/error vocabulary as Data Operations while preserving the existing background worker and secret-bearing URL rejection.
 
-Deferred: narrow-window bottom inspector, focused cells for remaining secondary tables, persistent table columns, icon/collapsed rail, chart brush gestures, document preview split, and page-header migration for lower-priority pages.
+Deferred from that slice: narrow-window bottom inspector, focused cells for remaining secondary tables, icon/collapsed rail, chart brush gestures, and page-header migration for lower-priority pages. Persistent priority-table columns and the metadata-only Documents preview split are now implemented below.
 
 ## 16. Split-Pane And Focused-Cell Interaction Slice
 
@@ -164,7 +164,7 @@ Deferred: narrow-window bottom inspector, focused cells for remaining secondary 
 - Added commands/aliases: `reset layout`, `clear table focus`, `copy focused cell`, `copy focused row`, and `open focused row`. Existing `toggle inspector`, `pin inspector`, and `unpin inspector` remain.
 - Table focus drives inspector follow context. Pinned inspector context remains owned and unchanged while selection/focus moves.
 
-Deferred: true bottom inspector mode, persistent table column widths/order/visibility, focused cells for every secondary table, collapsed icon rail, chart brushing, and document preview split.
+Deferred from that slice: true bottom inspector mode, focused cells for every secondary table, collapsed icon rail, and chart brushing. Priority-table column persistence and the Documents preview split are now implemented below.
 
 ## 17. Persistent Table Layout And Remaining Focus Slice
 
@@ -177,4 +177,24 @@ Deferred: true bottom inspector mode, persistent table column widths/order/visib
 - Focus updates inspector follow contexts; pinned contexts remain owned and unchanged.
 - Layout persistence excludes volatile row selections, focused rows/cells, filters, and active subjects.
 
-Deferred: drag-to-reorder, persistence of native egui drag-resize state, Jobs/chart/remaining Fund Detail descriptor migration, document preview split, narrow bottom inspector, collapsed icon rail, and chart brushing.
+## Descriptor completion and Documents preview split
+
+- Jobs scheduled/runs, Charts/Compare/Spreads series data, and Fund Detail distributions/documents now use the same stable descriptor and serialized layout registry as the earlier priority tables.
+- Left/right navigation traverses visible columns only. Per-table Columns menus provide visibility, focused-column width, show-all, reset, and copy-visible-row behavior. Global View/command reset and show-all actions apply without page-specific routing.
+- Job runs expose a hidden-by-default Run ID column so operators can reveal and copy the backend identifier without widening the default table.
+- Fund Detail distributions retain separate ex date, payment date, amount, currency, status and source semantics. Fund Detail documents expose type, publication date, status, source, change, last checked and a hidden URL/path column; unavailable service-only fields are not fabricated.
+- `src/ui/documents.rs` owns document URI, metadata rows/copy payload, and preview rendering. The global Documents page uses a resizable right-hand metadata preview above the wide breakpoint and a stacked preview on narrow windows.
+- Preview selection follows focused row, then selected row. When the inspector is pinned to a document, its row index takes precedence so continued table navigation does not replace the preview; pinned inspector state itself remains unchanged.
+- The preview provides Open Viewer, Open Fund, Copy URL/path, Copy Metadata and Pin Inspector. Full PDF rendering remains explicitly out of scope.
+- The split panel uses egui's stable panel state during the running session. Its ratio is not yet part of Mimer's JSON UI preferences.
+- Maintainability audit: `app.rs`, Charts, Fund Detail, Jobs and Documents are above the split-review threshold. This slice avoided adding preview code to those files by extracting `ui/documents.rs`; table menu/layout logic remains centralized in `ui/table_layout.rs`. A larger page-module split was deferred because moving existing behavior and tests would create a broad rewrite unrelated to descriptor fidelity.
+
+Deferred: drag-to-reorder, persistence of native egui drag-resize state, app-level Documents split-ratio persistence, remaining low-value secondary tables, narrow bottom inspector, linked job-detail split, collapsed icon rail, and chart brushing.
+
+## 18. egui 0.35 Inspection Workflow
+
+- The GUI uses `egui`/`eframe` `0.35.0`; the local Cargo feature `inspection` enables `eframe/inspection` without affecting default builds.
+- Normal `cargo run` remains inspection-free. For development-only visual inspection, run `EGUI_INSPECTION=1 cargo run --features inspection` from `mimer-gui/`.
+- Configure the coding agent or MCP client with server name `egui` and command `/Users/ludwigjonsson/.cargo/bin/egui-mcp`. The expected default inspection port is `5719`.
+- If `egui-mcp` is missing, install it with `cargo install --git https://github.com/rerun-io/kittest_inspector egui_mcp`; do not add it as a GUI crate dependency.
+- Future GUI slices should use MCP inspection for visual verification when native GUI launch and MCP connectivity are available, while continuing to keep automated checks independent of MCP.

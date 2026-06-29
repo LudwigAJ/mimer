@@ -37,7 +37,7 @@ impl KvRow {
     }
 }
 
-pub fn kv_grid(ui: &mut egui::Ui, id: impl std::hash::Hash, rows: &[KvRow]) {
+pub fn kv_grid(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, rows: &[KvRow]) {
     let min_col_width = (ui.available_width() * 0.34).clamp(120.0, 180.0);
     egui::Grid::new(id)
         .num_columns(2)

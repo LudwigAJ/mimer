@@ -702,34 +702,6 @@ impl TableState {
         Some(row_index)
     }
 
-    pub fn move_focus_column(
-        &mut self,
-        column_count: usize,
-        offset: isize,
-    ) -> Option<(usize, usize)> {
-        if column_count == 0 {
-            self.focused_column_index = None;
-            self.selected_cell = None;
-            return None;
-        }
-        let row_index = self.focused_row_index.or(self.selection.selected_index)?;
-        let last_column = column_count - 1;
-        let column_index = match (self.focused_column_index, offset.cmp(&0)) {
-            (Some(index), Ordering::Less) => index.saturating_sub(offset.unsigned_abs()),
-            (Some(index), Ordering::Greater) => {
-                index.saturating_add(offset as usize).min(last_column)
-            }
-            (Some(index), Ordering::Equal) => index.min(last_column),
-            (None, Ordering::Less) => last_column,
-            (None, Ordering::Equal | Ordering::Greater) => 0,
-        };
-        self.selection.select(row_index);
-        self.focused_row_index = Some(row_index);
-        self.focused_column_index = Some(column_index);
-        self.selected_cell = None;
-        Some((row_index, column_index))
-    }
-
     pub fn move_focus_visible_column(
         &mut self,
         visible_column_indices: &[usize],
@@ -885,7 +857,10 @@ mod tests {
 
         assert_eq!(table.move_focus_row(&visible, 1, Some(0)), Some(2));
         assert!(table.is_focused_cell(2, 0));
-        assert_eq!(table.move_focus_column(4, 1), Some((2, 1)));
+        assert_eq!(
+            table.move_focus_visible_column(&[0, 1, 2, 3], 1),
+            Some((2, 1))
+        );
         assert_eq!(table.move_focus_row(&visible, 1, Some(0)), Some(4));
         assert!(table.is_focused_cell(4, 1));
         assert_eq!(table.selected_index(), Some(4));
@@ -896,10 +871,16 @@ mod tests {
         let mut table = TableState::new(TableId::ScheduledJobs);
         table.select(3);
 
-        assert_eq!(table.move_focus_column(3, 1), Some((3, 0)));
-        assert_eq!(table.move_focus_column(3, 1), Some((3, 1)));
-        assert_eq!(table.move_focus_column(3, 10), Some((3, 2)));
-        assert_eq!(table.move_focus_column(3, -10), Some((3, 0)));
+        assert_eq!(table.move_focus_visible_column(&[0, 1, 2], 1), Some((3, 0)));
+        assert_eq!(table.move_focus_visible_column(&[0, 1, 2], 1), Some((3, 1)));
+        assert_eq!(
+            table.move_focus_visible_column(&[0, 1, 2], 10),
+            Some((3, 2))
+        );
+        assert_eq!(
+            table.move_focus_visible_column(&[0, 1, 2], -10),
+            Some((3, 0))
+        );
     }
 
     #[test]
@@ -1014,5 +995,33 @@ mod tests {
             table.move_focus_visible_column(&[0, 2, 5], -1),
             Some((2, 0))
         );
+    }
+
+    #[test]
+    fn migrated_table_ids_survive_layout_storage_roundtrip() {
+        let descriptors = [ColumnDescriptor::new("status", "Status", 90.0, 70.0, 160.0)];
+        let table_ids = [
+            TableId::ScheduledJobs,
+            TableId::JobRuns,
+            TableId::ChartSeriesData,
+            TableId::FundDetailDistributions,
+            TableId::FundDetailDocuments,
+            TableId::Documents,
+        ];
+        let mut registry = TableLayoutRegistry::default();
+        for table_id in table_ids {
+            registry.ensure(table_id, &descriptors);
+        }
+
+        let encoded = serde_json::to_string(&registry).expect("layout registry encodes");
+        let decoded: TableLayoutRegistry =
+            serde_json::from_str(&encoded).expect("layout registry decodes");
+
+        for table_id in table_ids {
+            assert_eq!(
+                decoded.table(table_id).map(|table| table.table_id.as_str()),
+                Some(table_id.key())
+            );
+        }
     }
 }
